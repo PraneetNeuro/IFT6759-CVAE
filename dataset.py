@@ -55,8 +55,10 @@ class Dataset:
     def save_sketches(self, path_to_save):
         if not hasattr(self, 'dataset'):
             self.transform_all_images()
-        os.mkdir('original', exist_ok=True)
-        os.mkdir(path_to_save, exist_ok=True)
+        if not os.path.exists('original'):
+            os.mkdir('original')
+        if not os.path.exists(path_to_save):
+            os.mkdir(path_to_save)
         for i, (img, sketch) in enumerate(self.dataset):
             cv2.imwrite(os.path.join('original', f'{i}.jpg'), img)
             cv2.imwrite(os.path.join(path_to_save, f'{i}.jpg'), sketch)
@@ -71,6 +73,8 @@ class Dataset:
         np.save('originals.npy', originals)
         np.save('sketches.npy', sketches)
 
+dataset = Dataset(path_to_images='images', img_size=256, n_images=1000, lazy_load=False)
+dataset.save_sketches('sketches')
 
 
 
