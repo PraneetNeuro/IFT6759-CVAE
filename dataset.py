@@ -73,8 +73,5 @@ class Dataset:
         np.save('originals.npy', originals)
         np.save('sketches.npy', sketches)
 
-dataset = Dataset(path_to_images='images', img_size=256, n_images=1000, lazy_load=False)
-dataset.save_sketches('sketches')
-
 
 
