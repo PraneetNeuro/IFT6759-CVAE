@@ -39,7 +39,7 @@ class VariationalAutoEncoder(nn.Module):
         self.X = torch.from_numpy(self.X).float().view(-1, 1, self.input_size[0], self.input_size[1]).to(self.device)
 
         self.Y = np.load(dataset_info['target']) / 255.0
-        self.Y = torch.from_numpy(self.Y).float().view(-1, 1, self.output_size[0], self.output_size[1]).to(self.device)
+        self.Y = torch.from_numpy(self.Y).float().view(-1, 3, self.output_size[0], self.output_size[1]).to(self.device)
 
         if dataset_info['condition'] is not None:
             self.condition_data = np.load(dataset_info['condition'])
@@ -109,7 +109,7 @@ class VariationalAutoEncoder(nn.Module):
     def loss(self, generated_image, ground_truth, mean, log_std):
         reconstruction_loss = F.mse_loss(generated_image, ground_truth)
         latent_distrbution = torch.distributions.Normal(mean, log_std.exp())
-        kl_divergence = F.kl_div(latent_distrbution, self.distribution)
+        kl_divergence = torch.distributions.kl_divergence(latent_distrbution, self.distribution).mean()
 
         return reconstruction_loss + kl_divergence
 
