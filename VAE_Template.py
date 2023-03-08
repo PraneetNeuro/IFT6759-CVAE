@@ -90,8 +90,8 @@ class VariationalAutoEncoder(nn.Module):
         return z, mean, log_std
     
     def decoder(self, encoded_representation, input):
-        x = self.projection_layer(x)
-        x = encoded_representation.view(-1, self.input_size[0], self.input_size[1])
+        x = self.projection_layer(encoded_representation)
+        x = x.view(-1, 1, self.input_size[0], self.input_size[1])
         if self.model_config['skip_connection']:
             x = torch.cat((x, input), dim=1)
         else:
