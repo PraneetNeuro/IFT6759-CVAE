@@ -18,7 +18,7 @@ class VariationalAutoEncoder(nn.Module):
     }):
         super(VariationalAutoEncoder, self).__init__()
 
-        self.distribution = torch.distributions.Normal(torch.zeros(self.model_config['distribution_dim']), torch.ones(self.model_config['distribution_dim']))
+        self.distribution = torch.distributions.Normal(torch.zeros(model_config['distribution_dim']), torch.ones(model_config['distribution_dim']))
 
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
