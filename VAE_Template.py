@@ -62,7 +62,7 @@ class VariationalAutoEncoder(nn.Module):
         # Encoder layers
 
         # bottleneck and projection layers
-        self.bottle_neck = nn.Linear(100, condition_size)
+        self.bottle_neck = nn.Linear(?, condition_size)
         self.mean = torch.nn.Linear(condition_size, self.model_config['distribution_dim'])
         self.log_std = torch.nn.Linear(condition_size, self.model_config['distribution_dim'])
 
@@ -73,7 +73,7 @@ class VariationalAutoEncoder(nn.Module):
         # Encoder Forward Pass
         
         # high dimensional projection through linear layer
-        x = torch.flatten(x)
+        x = torch.flatten(x, 1)
         x = self.bottle_neck(x)
         if not self.model_config['condition']:
             condition = torch.ones(x.size())
