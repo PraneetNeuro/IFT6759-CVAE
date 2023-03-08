@@ -32,9 +32,6 @@ class Dataset:
     
     def load_images(self):
         try:
-            print(self.img_size)
-            print(self.imagefiles)
-
             self.images = [cv2.imread(img) for img in self.imagefiles]
         except Exception as e:
             print(e)
