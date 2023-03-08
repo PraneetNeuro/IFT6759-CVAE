@@ -121,14 +121,14 @@ class VariationalAutoEncoder(nn.Module):
                 batch_Y = self.train_Y[i:i+batch_size]
                 batch_condition = self.train_condition[i:i+batch_size]
                 optimizer.zero_grad()
-                z, mean, log_std, output = self.forward(batch_X, batch_condition)
+                _, mean, log_std, output = self.forward(batch_X, batch_condition)
                 loss = self.loss(output, batch_Y, mean, log_std)
                 loss.backward()
                 optimizer.step()
             print(f'Epoch {epoch} Loss: {loss}')
             with torch.no_grad():
-                output = self.forward(self.test_X, self.test_condition)
-                loss = self.loss(self.test_Y, output)
+                _, mean, log_std, output = self.forward(self.test_X, self.test_condition)
+                loss = self.loss(self.test_Y, output, mean, log_std)
                 print(f'Validation Loss: {loss}')
             self.save_model(save_path)
 

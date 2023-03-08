@@ -71,15 +71,11 @@ class AutoEncoder(nn.Module):
         # high dimensional projection through linear layer
         x = torch.flatten(x)
         x = self.bottle_neck(x)
-        if not self.model_config['condition']:
+        if self.model_config['condition']:    
             if self.model_config['condition_type'] == 'add':
-                condition = torch.zeros_like(x)
+                x = torch.add(x, condition)
             else:
-                condition = torch.ones_like(x)
-        if self.model_config['condition_type'] == 'add':
-            x = torch.add(x, condition)
-        else:
-            x = torch.mul(x, condition)
+                x = torch.mul(x, condition)
         x = self.projection_layer(x)
         return x
     
@@ -89,7 +85,8 @@ class AutoEncoder(nn.Module):
             x = torch.cat((x, input), dim=1)
         else:
             x = x
-
+        # Decoder Forward Pass
+        
         return x
     
     def forward(self, input, condition):
