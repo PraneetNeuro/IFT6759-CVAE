@@ -103,7 +103,7 @@ class VariationalAutoEncoder(nn.Module):
     
     def forward(self, input, condition):
         z, mean, log_std = self.encoder(input, condition)
-        x = self.decoder(x, input)
+        x = self.decoder(z, input)
         return z, mean, log_std, x
     
     def loss(self, generated_image, ground_truth, mean, log_std):
