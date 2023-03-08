@@ -62,7 +62,7 @@ class VariationalAutoEncoder(nn.Module):
         # Encoder layers
 
         # bottleneck and projection layers
-        self.bottle_neck = nn.Linear(?, condition_size)
+        self.bottle_neck = nn.LazyLinear(condition_size)
         self.mean = torch.nn.Linear(condition_size, self.model_config['distribution_dim'])
         self.log_std = torch.nn.Linear(condition_size, self.model_config['distribution_dim'])
 
