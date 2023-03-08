@@ -69,7 +69,7 @@ class AutoEncoder(nn.Module):
         # Encoder Forward Pass
 
         # high dimensional projection through linear layer
-        x = torch.flatten(x)
+        x = torch.flatten(x, 1)
         x = self.bottle_neck(x)
         if self.model_config['condition']:    
             if self.model_config['condition_type'] == 'add':
