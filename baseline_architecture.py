@@ -13,17 +13,31 @@ class CelebADataset(torch.utils.data.Dataset):
         output_size = dataset_info['output_size']
         condition_size = dataset_info['condition_size']
 
-        self.X = np.load(dataset_info['source'])
-        self.X = self.X - np.mean(self.X) / np.std(self.X)
-        self.X = torch.from_numpy(self.X).float().view(-1, 1, input_size[0], input_size[1])
+        imgs = np.load(dataset_info['source'])[:29999]
+        print(input_size)
+        imgs_resized = np.zeros(shape=(29999,input_size[0],input_size[1]))
+        for i, img in enumerate(imgs):
+            img_resized = cv2.resize(img,input_size)
+            imgs_resized[i] = img_resized
+        print(imgs_resized.shape)
+        self.X = torch.from_numpy(imgs_resized).float()
+        print(self.X.shape)
+        self.X = self.X - torch.mean(self.X) / torch.std(self.X)
+        self.X = self.X.view(-1, 1, input_size[0], input_size[1])
         train_len = int(len(self.X) * dataset_info['train_split'])
-        
+
         self.train_X = self.X[0:train_len]
         self.test_X = self.X[train_len:len(self.X)]
 
-        self.Y = np.load(dataset_info['target'])
-        self.Y = self.Y - np.mean(self.Y) / np.std(self.Y)
-        self.Y = torch.from_numpy(self.Y).float().view(-1, 3, output_size[0], output_size[1])
+        imgs = np.load(dataset_info['target'])
+        imgs_resized = np.zeros(shape=(29999,output_size[0],output_size[1],3))
+        for i, img in enumerate(imgs):
+            img_resized = cv2.resize(img,output_size)
+            imgs_resized[i] = img_resized
+
+        self.Y = torch.from_numpy(imgs_resized).float()
+        self.Y = self.Y - torch.mean(self.Y) / np.std(self.Y)
+        self.Y = self.Y.float().view(-1, 3, output_size[0], output_size[1])
         self.train_Y = self.Y[0:train_len]
         self.test_Y = self.Y[train_len:len(self.Y)]
 
@@ -186,5 +200,10 @@ class AutoEncoder(nn.Module):
     def load_model(self, path):
         self.load_state_dict(torch.load(path))
 
-ae = AutoEncoder(input_size=(128, 128), output_size=(268, 268), condition_size=1024)
-ae.train(epochs=10, batch_size=350, save_path='model.pth')
+ae = AutoEncoder(input_size=(128, 128), output_size=(268, 268), condition_size=1024, dataset_info={
+        'source': '/home/yiyi2023/projects/def-sponsor00/cvae/sketches_30k.npy',
+        'target': '/home/yiyi2023/projects/def-sponsor00/cvae/originals_30k.npy',
+        'condition': None,
+        'train_split': 0.8,
+    })
+ae.train(epochs=50, batch_size=350, save_path='model.pth')
