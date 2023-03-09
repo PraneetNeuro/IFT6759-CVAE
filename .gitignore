@@ -3,8 +3,6 @@
 __pycache__
 /img_data
 
-/original
-/sketches
 
 
 /sample_outputs
@@ -17,3 +15,10 @@ wandb_test.py
 *.jpg
 wandb_test.py
 /.ipynb_checkpoints
+
+/npy_files
+/original
+/sketches
+/model_files
+wandb_example_run.ipynb
+wandb_example_run.ipynb
