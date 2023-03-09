@@ -32,7 +32,7 @@ class AutoEncoder(nn.Module):
         self.to(self.device)
 
 
-        self.art = wandb.Artifact("test-model", type="model")
+        self.art = wandb.Artifact("baseline", type="model")
         # art.add_file("test_model_model_weights.pt")
         #  WANDB INITIALIZATION
         wandb.init(
@@ -208,19 +208,19 @@ class AutoEncoder(nn.Module):
                 optimizer.step()
 
                 # use this block to calculate all test set metrics to avoid affecting model
-                if gen_images:
-                    with torch.no_grad():
+            if gen_images:
+                with torch.no_grad():
 
-                        # generate test images
+                    # generate test images
 
-                        print(f'Epoch {epoch} Batch {i} Loss: {loss_train}')
-                        test_img = cv2.resize(cv2.imread('test.jpg', cv2.IMREAD_GRAYSCALE), (128, 128)) 
-                        test_img = test_img - np.mean(test_img) / np.std(test_img)
-                        test_img = torch.from_numpy(test_img).float().view(-1, 1, self.input_size[0], self.input_size[1]).to(self.device)
-                        test_condition = torch.ones((1, self.condition_size)).to(self.device)
-                        output_im = self.forward(test_img, test_condition)
-                        output_im = output_im.numpy().reshape(268, 268, 3)
-                        cv2.imwrite(f'sample_outputs/output_{epoch}_{i}.jpg', output_im)
+                    print(f'Epoch {epoch} Batch {i} Loss: {loss_train}')
+                    test_img = cv2.resize(cv2.imread('test.jpg', cv2.IMREAD_GRAYSCALE), (128, 128)) 
+                    test_img = test_img - np.mean(test_img) / np.std(test_img)
+                    test_img = torch.from_numpy(test_img).float().view(-1, 1, self.input_size[0], self.input_size[1]).to(self.device)
+                    test_condition = torch.ones((1, self.condition_size)).to(self.device)
+                    output_im = self.forward(test_img, test_condition)
+                    output_im = output_im.numpy().reshape(268, 268, 3)
+                    cv2.imwrite(f'sample_outputs/output_{epoch}_{i}.jpg', output_im)
                 
 
                     
