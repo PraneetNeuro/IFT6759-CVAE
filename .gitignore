@@ -1,3 +1,17 @@
 /env
 
 __pycache__
+/img_data
+
+/original
+/sketches
+/sample_outputs
+model.pth
+originals.npy
+/wandb
+sketches.npy
+wandb.ipynb
+wandb_test.py
+*.jpg
+wandb_test.py
+/.ipynb_checkpoints
