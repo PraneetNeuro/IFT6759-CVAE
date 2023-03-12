@@ -11,7 +11,7 @@ import os
 
 
 if __name__ == '__main__':
-    n_images = 5  # number of images to extract
+    n_images = 6  # number of images to extract
     path_to_images = 'data/celeba/img_align_celeba.zip'  # path to zip file
     path_to_save = 'data/celeba/test'  # path to extract (will save a bunch .jpg to use Praneet Dataset class)
     if not os.path.exists(path_to_save):
@@ -20,7 +20,7 @@ if __name__ == '__main__':
     # Loop to extract from zip file without unzipping all
     with zipfile.ZipFile(path_to_images, "r") as z:
         i = 0
-        for name in z.namelist()[1:n_images]:  # Don't take the first because it's the folder not a file
+        for name in z.namelist()[1:n_images+1]:  # Don't take the first because it's the folder not a file
             img_bytes = z.open(name)
             img_data = Image.open(img_bytes)
             image_as_array = np.array(img_data, np.uint8)
@@ -33,7 +33,7 @@ if __name__ == '__main__':
             # cv2.imwrite(os.path.join(path_to_save, str(i) + '_deformed.jpg'), X_deformed)
             i += 1
 
-    data = Dataset(path_to_save, img_size=(218, 178), n_images=n_images, sigmaX=3, sigmaY=3, ksize=21, deform=False)
+    data = Dataset(path_to_save, source_image_size=(218, 178), n_images=n_images, simpler=True)
     data.transform_all_images()
     data.save_sketches('sketches')
     data.save_as_pickle()
