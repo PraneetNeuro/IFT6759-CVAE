@@ -3,6 +3,8 @@ import numpy as np
 import cv2
 from tqdm import tqdm
 from rembg import remove
+import Augmentor
+import shutil
 
 
 class Dataset:
@@ -92,6 +94,66 @@ class Dataset:
 
         originals = np.array([(img - np.mean(img) / np.std(img)) if not self.resize else cv2.resize((img - np.mean(img) / np.std(img)), (self.target_image_size, self.target_image_size)) for img, _ in self.dataset])
         sketches = np.array([sketch for _, sketch in self.dataset])
-
+        print(sketches.shape)
         np.save('originals.npy', originals)
         np.save('sketches.npy', sketches)
+
+
+def distortion(source_path, n_images=-1, save_path='distorted', replace=True):
+    '''
+    To generate distorted sketches from sketches folder
+    :param source_path (str): Folder containing all sketches to be treated
+    :param n_images (int): Number of sketches to transform (default is all)
+    :param save_path: Where to save distorted sketches
+    :return: None
+    '''
+    # We need a temporary folder to make sure every sketch is treated exactly one time
+    # This is because that Augmentor normally picks a file randomly from the source folder to apply a deformation
+    temp_folder = os.path.join(source_path, 'temp')
+    if os.path.exists(temp_folder):
+        shutil.rmtree(temp_folder)
+        os.mkdir(temp_folder)
+    else:
+        os.mkdir(temp_folder)  # Create a temporary folder
+        print('folder created')
+    if not os.path.exists(save_path):
+        os.mkdir(save_path)
+    for file_name in os.listdir(source_path)[:n_images]:
+        file_path = os.path.join(source_path, file_name)
+        temp_file_path = os.path.join(temp_folder, file_name)
+        # Move the original sketch to the temp folder
+        os.rename(file_path, temp_file_path)
+        # Setting the pipeline to the folder containing only one sketch
+        p = Augmentor.Pipeline(temp_folder)
+        p.random_distortion(probability=1, grid_width=3, grid_height=3, magnitude=5)
+        # p.gaussian_distortion(probability=1, grid_width=3, grid_height=3, magnitude=5, corner='bell', method='in')
+        # Generate one random deformation
+        p.sample(1)
+        # Return the original sketch to the source folder, the distorted is in source/output
+        os.rename(temp_file_path, file_path)
+
+        # Move the distorted file and rename it
+        for distorted_name in os.listdir(temp_folder + '/output'):
+            distorted_path = os.path.join(temp_folder + '/output', distorted_name)
+            new_distorted_path = save_path + '/' + file_name
+            try:
+                os.rename(distorted_path, new_distorted_path)
+            except Exception as e:
+                if replace:
+                    os.remove(new_distorted_path)
+                    try:
+                        os.rename(distorted_path, new_distorted_path)
+                    except Exception as e:
+                        print(e)
+                else:
+                    print(f'{new_distorted_path} already exists, set replace to True or delete it. Deleting new file.')
+                    os.remove(distorted_path)
+    os.rmdir(temp_folder + '/output')
+    os.rmdir(temp_folder)
+
+
+def compile_into_npy(save_path):
+    distorted = [cv2.imread(os.path.join(save_path, file)) for file in os.listdir(save_path)]
+    distorted = np.array(distorted)
+    print(distorted.shape)
+    np.save('distorted.npy', distorted)
