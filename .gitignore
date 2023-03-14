@@ -2,4 +2,10 @@
 
 __pycache__
 *.jpg
+*.png
 /data/celeba/img_align_celeba.zip
+*.pth
+
+/wandb
+
+/.ipynb_checkpoints

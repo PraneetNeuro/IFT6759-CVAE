@@ -14,17 +14,20 @@ class CelebADataset(torch.utils.data.Dataset):
     def __init__(self, dataset_info):
         super(CelebADataset, self).__init__()
 
+        num_img = dataset_info['num_img']
+
         condition_size = dataset_info['condition_size']
+
 
         self.dataset_info = dataset_info
 
-        self.X = os.listdir(dataset_info['source'])
+        self.X = os.listdir(dataset_info['source'])[:num_img]
         train_len = int(len(self.X) * dataset_info['train_split'])
         
         self.train_X = self.X[0:train_len]
         self.test_X = self.X[train_len:len(self.X)]
 
-        self.Y = os.listdir(dataset_info['target'])
+        self.Y = os.listdir(dataset_info['target'])[:num_img]
         self.train_Y = self.Y[0:train_len]
         self.test_Y = self.Y[train_len:len(self.Y)]
 
@@ -32,7 +35,7 @@ class CelebADataset(torch.utils.data.Dataset):
             self.condition_data = np.load(dataset_info['condition'])
         else:
             self.condition_data = np.ones((len(self.X), 15))
-        self.condition_data = torch.from_numpy(self.condition_data).float().view(-1, condition_size)
+        self.condition_data = torch.from_numpy(self.condition_data).float().view(-1, condition_size)[:num_img]
 
         self.train_condition_data = self.condition_data[0:train_len]
         self.test_condition_data = self.condition_data[train_len:len(self.condition_data)]
@@ -100,6 +103,7 @@ class AutoEncoder(nn.Module):
         'source': 'sketches',
         'target': 'original',
         'condition': 'conditions.npy',
+        'num_img': 100,
         'train_split': 0.95,
     }, model_config={
         'condition': True,
@@ -116,7 +120,6 @@ class AutoEncoder(nn.Module):
             self.device = torch.device('cpu')
 
         self.art = wandb.Artifact("baseline", type="model")
-        # art.add_file("test_model_model_weights.pt")
         #  WANDB INITIALIZATION
         wandb.init(
             # set the wandb project where this run will be logged
@@ -144,6 +147,7 @@ class AutoEncoder(nn.Module):
             'train_split': dataset_info['train_split'],
             'input_size': self.input_size,
             'output_size': output_size,
+            'num_img': 100,
             'condition_size': 15,
         })
 
@@ -180,13 +184,7 @@ class AutoEncoder(nn.Module):
             nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=0)
         )
 
-        # # dummy pass to initialize watch:
-        # with torch.no_grad():
-        #     dummy_batch = self.train_X[:1]
-        #     dummy_cond = self.train_condition[:1]
-        #     _ = self.forward(dummy_batch, dummy_cond)
 
-        # wandb.watch(self, self.loss, log="all")
 
         self.to(self.device)
 
@@ -247,16 +245,7 @@ class AutoEncoder(nn.Module):
         ssim = structural_similarity_index_measure(output, ground_truth)
         return ssim
 
-    def train(self, epochs, batch_size, save_path, gen_images = None, gen_condition = None):
-
-        # # dummy pass to initialize watch:
-        # with torch.no_grad():
-        #     dummy_batch = self.train_X[:1]
-        #     # dummy_cond = np.zeros((len(self.X), self.condition_size))
-        #     dummy_cond = self.train_condition[:1]
-        #     _ = self.forward(dummy_batch, dummy_cond)
-
-        # wandb.watch(self, self.loss, log="all")
+    def train(self, epochs, batch_size, save_path, gen_images = None, gen_condition = None, gen_images_input = None, gen_images_output = None):
 
         optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
         self.dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
@@ -282,28 +271,34 @@ class AutoEncoder(nn.Module):
                 print(f'Epoch {epoch} Batch {batch_idx} Loss: {loss_train}')
 
                 # use this block to calculate all test set metrics to avoid affecting model
-            if gen_images:
+
+            # generate images from two sets of sketches: holdout and cuhk
+            if gen_images is not None: # boolean
                 with torch.no_grad():
                     # generate test images
-                    images = os.listdir(gen_images)
-                    images = [cv2.resize(cv2.imread(os.path.join(gen_images, image), cv2.IMREAD_GRAYSCALE), self.input_size) for image in images]
+                    image_files = os.listdir(gen_images_input)
+                    images = [cv2.resize(cv2.imread(os.path.join(gen_images_input, image), cv2.IMREAD_GRAYSCALE), self.input_size) for image in image_files]
                     images = np.array(images)
                     images = images - np.mean(images) / np.std(images)
-                    images = torch.from_numpy(images).float().view(-1, 1, self.input_size, self.input_size).to(self.device)
+                    images = torch.from_numpy(images).float().view(-1, 1, self.input_size[0], self.input_size[1]).to(self.device)
                     
                     if gen_condition:
                         conditions = np.load(gen_condition)
                         conditions = torch.from_numpy(conditions).float().view(-1, 15).to(self.device)
                     else:
                         conditions = torch.ones((1, 15)).to(self.device)
-                    gen_images = self.forward(images, conditions)
-                    gen_images = gen_images.numpy().reshape(-1, 252, 252, 3)
-                    for i, image in enumerate(gen_images):
-                        if not os.path.exists('gen_images'):
-                            os.mkdir('gen_images')
-                        cv2.imwrite(f'gen_images/{i}.jpg', image)
-                
-            print(f'Epoch {epoch} Loss: {loss_train}')
+                    output_images = self.forward(images, conditions)
+                    output_images = output_images.cpu().numpy().reshape(-1, 252, 252, 3)
+
+                    output_dir = gen_images_output + f'/epoch_{epoch}'
+                    if not os.path.exists(output_dir):
+                            os.mkdir(output_dir)
+
+                    for i, image in enumerate(output_images):
+                        
+                        cv2.imwrite(output_dir + f'/{i}.jpg', image)
+                    
+                print(f'Epoch {epoch} Loss: {loss_train}')
 
             with torch.no_grad():
                 test_X = test_X.to(self.device)
@@ -314,7 +309,7 @@ class AutoEncoder(nn.Module):
                 print(f'Validation Loss: {loss_valid}')
 
                 psnr_valid = self.PSNR(output_valid, test_Y)
-                ssim_valid = self.PSNR(output_valid, test_Y)
+                ssim_valid = self.SSIM(output_valid, test_Y)
             self.save_model(save_path)
        
             wandb.log({
@@ -337,5 +332,26 @@ class AutoEncoder(nn.Module):
         self.load_state_dict(torch.load(path))
 
 if __name__ == '__main__':
-    ae = AutoEncoder(input_size=(128, 128), output_size=(252, 252), condition_size=1024)
-    ae.train(epochs=10, batch_size=128, save_path='model.pth')
+    dataset_info={
+    'source': 'model_input/sketches',
+    'target': 'model_input/original',
+    'condition': 'model_input/conditions.npy',
+    'num_img': 100,
+    'train_split': 0.8,
+    }
+
+    input_size = [128, 128]
+    output_size = [252, 252]
+    condition_size = 1024
+
+    AE = AutoEncoder(input_size=input_size,
+        output_size=output_size,
+        condition_size=condition_size,
+        dataset_info=dataset_info
+    )
+    AE.train(epochs=10, 
+             batch_size=128, 
+             save_path='model.pth',
+             gen_images=True,
+             gen_images_input='generation_input/holdout_sketches',
+             gen_images_output='generation_output')
