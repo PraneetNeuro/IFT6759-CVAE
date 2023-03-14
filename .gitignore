@@ -5,7 +5,9 @@ __pycache__
 
 
 
-/sample_outputs
+/sample_outputs/*.jpg
+/sample_outputs/*.png
+
 model.pth
 originals.npy
 /wandb
@@ -17,8 +19,14 @@ wandb_test.py
 /.ipynb_checkpoints
 
 
-/original
-/sketches
-/model_files
+/original/*.jpg
+/original/*.png
+
+/sketches/*.jpg
+/sketches/*.png
+
+/model_files/*.pth
+
+
 wandb_example_run.ipynb
 wandb_example_run.ipynb
