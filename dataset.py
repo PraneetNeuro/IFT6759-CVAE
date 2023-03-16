@@ -6,7 +6,6 @@ from rembg import remove
 import Augmentor
 import shutil
 
-
 class Dataset:
 
     def __init__(self,
@@ -62,6 +61,7 @@ class Dataset:
         else:
             img_blur = cv2.GaussianBlur(img_gray_inv, ksize=(21, 21), sigmaX=0, sigmaY=0)
             img_blend = cv2.divide(img_gray, 255 - img_blur, scale=256)
+
         if self.resize:
             img_blend = cv2.resize(img_blend, self.img_size)
 
@@ -91,7 +91,6 @@ class Dataset:
     def save_as_pickle(self, path_to_save='sketches'):
         if not hasattr(self, 'dataset'):
             self.transform_all_images()
-
         originals = np.array([(img - np.mean(img) / np.std(img)) if not self.resize else cv2.resize((img - np.mean(img) / np.std(img)), (self.target_image_size, self.target_image_size)) for img, _ in self.dataset])
         sketches = np.array([sketch for _, sketch in self.dataset])
         print(sketches.shape)
@@ -101,7 +100,6 @@ class Dataset:
         if self.remove_bg:
             path_to_save = path_to_save + '_no_bg'
         np.save(path_to_save+'.npy', sketches)
-
 
 def distortion(source_path, n_images=-1, save_path='distorted', replace=True):
     '''
