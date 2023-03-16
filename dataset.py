@@ -88,7 +88,7 @@ class Dataset:
             cv2.imwrite(os.path.join('original', f'{i}.jpg'), img if not self.resize else cv2.resize(img, (self.target_image_size, self.target_image_size)))
             cv2.imwrite(os.path.join(path_to_save, f'{i}.jpg'), sketch)
     
-    def save_as_pickle(self):
+    def save_as_pickle(self, path_to_save='sketches'):
         if not hasattr(self, 'dataset'):
             self.transform_all_images()
 
@@ -96,7 +96,11 @@ class Dataset:
         sketches = np.array([sketch for _, sketch in self.dataset])
         print(sketches.shape)
         np.save('originals.npy', originals)
-        np.save('sketches.npy', sketches)
+        if self.simpler:
+            path_to_save = path_to_save + '_simpler'
+        if self.remove_bg:
+            path_to_save = path_to_save + '_no_bg'
+        np.save(path_to_save+'.npy', sketches)
 
 
 def distortion(source_path, n_images=-1, save_path='distorted', replace=True):
