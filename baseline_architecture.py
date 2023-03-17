@@ -195,6 +195,7 @@ class AutoEncoder(nn.Module):
         enc4 = self.encoder_conv4(self.max_pool(enc3))
 
         condition = self.condition_projection(condition)
+        condition = F.relu(condition)
         condition = condition.view(-1, 1, 32, 32)
 
         conditioned_enc4 = enc4 * condition
