@@ -2,7 +2,7 @@ import os
 import numpy as np
 import cv2
 from tqdm import tqdm
-from rembg import remove
+# from rembg import remove
 import Augmentor
 import shutil
 
@@ -50,7 +50,8 @@ class Dataset:
         # Let us study the transformations and work on improvising it before we move on to training the model
         # img = img - np.mean(img) / np.std(img)
         if self.remove_bg:
-            img = remove(img)
+            # img = remove(img)
+            pass
         img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         img_gray_inv = 255 - img_gray
         if self.simpler:
@@ -80,14 +81,17 @@ class Dataset:
         if self.simpler:
             path_to_save = path_to_save + '_simpler'
         if self.remove_bg:
-            path_to_save = path_to_save + '_no_bg'
+            # path_to_save = path_to_save + '_no_bg'
+            pass
         if not os.path.exists(path_to_save):
             os.mkdir(path_to_save)
-        for i, (img, sketch) in tqdm(enumerate(self.dataset[::-1])):
-            img = img - np.mean(img) / np.std(img)
-            cv2.imwrite(os.path.join('original', f'{i}.jpg'), img if not self.resize else cv2.resize(img, (self.target_image_size, self.target_image_size)))
-            cv2.imwrite(os.path.join(path_to_save, f'{i}.jpg'), sketch)
-    
+        for i, (img, sketch) in tqdm(enumerate(self.dataset)):
+            file_name = os.path.split(self.imagefiles[i])[1]
+            # img = img - np.mean(img) / np.std(img)
+            cv2.imwrite(os.path.join('original', file_name), img if not self.resize else cv2.resize(img, (self.target_image_size, self.target_image_size)))
+            cv2.imwrite(os.path.join(path_to_save, file_name), sketch)
+
+
     def save_as_pickle(self, path_to_save='sketches'):
         if not hasattr(self, 'dataset'):
             self.transform_all_images()
@@ -120,8 +124,9 @@ def distortion(source_path, n_images=-1, save_path='distorted', replace=True):
         print('folder created')
     if not os.path.exists(save_path):
         os.mkdir(save_path)
-    for file_name in os.listdir(source_path)[:n_images]:
-        file_path = os.path.join(source_path, file_name)
+    for file_path in os.listdir(source_path)[1:n_images+1]:
+        file_name = os.path.split(file_path)[1]
+        file_path = os.path.join(source_path, file_name)  # Sometimes glitch?
         temp_file_path = os.path.join(temp_folder, file_name)
         # Move the original sketch to the temp folder
         os.rename(file_path, temp_file_path)
@@ -135,12 +140,14 @@ def distortion(source_path, n_images=-1, save_path='distorted', replace=True):
         os.rename(temp_file_path, file_path)
 
         # Move the distorted file and rename it
-        for distorted_name in os.listdir(temp_folder + '/output'):
+        for distorted_path in os.listdir(temp_folder + '/output')[1:]:
+            distorted_name = os.path.split(distorted_path)[1]
             distorted_path = os.path.join(temp_folder + '/output', distorted_name)
-            new_distorted_path = save_path + '/' + file_name
+            new_distorted_path = os.path.join(save_path, file_name)
             try:
                 os.rename(distorted_path, new_distorted_path)
             except Exception as e:
+                print(e)
                 if replace:
                     os.remove(new_distorted_path)
                     try:
@@ -154,8 +161,9 @@ def distortion(source_path, n_images=-1, save_path='distorted', replace=True):
     os.rmdir(temp_folder)
 
 
-def compile_into_npy(save_path):
-    distorted = [cv2.imread(os.path.join(save_path, file)) for file in os.listdir(save_path)]
+def compile_into_npy_and_zip(save_path):
+    distorted = [cv2.imread(file) for file in os.listdir(save_path)[1:]]
     distorted = np.array(distorted)
     print(distorted.shape)
     np.save('distorted.npy', distorted)
+    shutil.make_archive(save_path, 'zip', save_path)
