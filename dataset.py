@@ -124,6 +124,8 @@ def distortion(source_path, n_images=-1, save_path='distorted', replace=True):
         print('folder created')
     if not os.path.exists(save_path):
         os.mkdir(save_path)
+    if n_images == -1:
+        n_images = None
     file_list = os.listdir(source_path)
     file_list = list(filter(lambda x: x.endswith('.jpg') or x.endswith('.png') or x.endswith('.jpeg'),
                             file_list))[:n_images]

@@ -27,7 +27,7 @@ def loop_function(batch_idx):
     begin = batch_idx * n_images
     end = (batch_idx + 1) * n_images
     if (partial == 1) & (batch_idx == n_batches):
-        end = -1
+        end = None
     for file_path in list_of_files[begin:end]:
         img_bytes = z.open(file_path)
         img_data = Image.open(img_bytes)
