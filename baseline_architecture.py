@@ -260,16 +260,17 @@ class AutoEncoder(nn.Module):
                     image_files = os.listdir(gen_images_input)
                     images = [cv2.resize(cv2.imread(os.path.join(gen_images_input, image), cv2.IMREAD_GRAYSCALE), self.input_size) for image in image_files]
                     images = np.array(images)
-                    images = images - np.mean(images) / np.std(images)
-                    images = torch.from_numpy(images).float().view(-1, 1, self.input_size[0], self.input_size[1]).to(self.device)
+                    images = torch.from_numpy(images).float().view(-1, 1, self.input_size[0], self.input_size[1])
+                    images = self.dataset.transforms['normalize_sketch'](images)
+                    images = images.to(self.device)
                     
                     if gen_condition:
                         conditions = np.load(gen_condition)
                         conditions = torch.from_numpy(conditions).float().view(-1, 15).to(self.device)
                     else:
-                        conditions = torch.ones((1, 15)).to(self.device)
+                        conditions = torch.randint(0, 2, (images.shape[0], 15)).float().to(self.device)
                     output_images = self.forward(images, conditions)
-                    output_images = output_images.cpu().numpy().reshape(-1, 252, 252, 3)
+                    output_images = output_images.cpu().numpy().reshape(-1, self.output_size[0], self.output_size[1], 3)
 
                     output_dir = gen_images_output + f'/epoch_{epoch}'
                     if not os.path.exists(output_dir):
