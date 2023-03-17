@@ -124,7 +124,10 @@ def distortion(source_path, n_images=-1, save_path='distorted', replace=True):
         print('folder created')
     if not os.path.exists(save_path):
         os.mkdir(save_path)
-    for file_path in os.listdir(source_path)[1:n_images+1]:
+    file_list = os.listdir(source_path)
+    file_list = list(filter(lambda x: x.endswith('.jpg') or x.endswith('.png') or x.endswith('.jpeg'),
+                            file_list))[:n_images]
+    for file_path in file_list:
         file_name = os.path.split(file_path)[1]
         file_path = os.path.join(source_path, file_name)  # Sometimes glitch?
         temp_file_path = os.path.join(temp_folder, file_name)
@@ -139,8 +142,11 @@ def distortion(source_path, n_images=-1, save_path='distorted', replace=True):
         # Return the original sketch to the source folder, the distorted is in source/output
         os.rename(temp_file_path, file_path)
 
+        distorted_file_list = os.listdir(temp_folder + '/output')
+        distorted_file_list = list(filter(lambda x: x.endswith('.jpg') or x.endswith('.png') or x.endswith('.jpeg'),
+                                          distorted_file_list))
         # Move the distorted file and rename it
-        for distorted_path in os.listdir(temp_folder + '/output')[1:]:
+        for distorted_path in distorted_file_list:
             distorted_name = os.path.split(distorted_path)[1]
             distorted_path = os.path.join(temp_folder + '/output', distorted_name)
             new_distorted_path = os.path.join(save_path, file_name)
@@ -162,7 +168,10 @@ def distortion(source_path, n_images=-1, save_path='distorted', replace=True):
 
 
 def compile_into_npy_and_zip(save_path):
-    distorted = [cv2.imread(file) for file in os.listdir(save_path)[1:]]
+    file_list = os.listdir(save_path)
+    file_list = list(filter(lambda x: x.endswith('.jpg') or x.endswith('.png') or x.endswith('.jpeg'),
+                            file_list))
+    distorted = [cv2.imread(file) for file in file_list]
     distorted = np.array(distorted)
     print(distorted.shape)
     np.save('distorted.npy', distorted)
