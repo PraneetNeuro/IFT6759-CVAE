@@ -10,6 +10,21 @@ import torchvision
 
 import wandb
 
+class unetBlocks:
+    def conv_block(in_channels, out_channels):
+        return nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+
+    def upconv_block(in_channels, out_channels):
+        return nn.Sequential(
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
+            nn.ReLU(inplace=True)
+        )
+
 class CelebADataset(torch.utils.data.Dataset):
     def __init__(self, dataset_info):
         super(CelebADataset, self).__init__()
@@ -99,7 +114,7 @@ class CelebADataset(torch.utils.data.Dataset):
         
 
 class AutoEncoder(nn.Module):
-    def __init__(self, input_size, output_size, condition_size=1024, num_img=None, dataset_info={
+    def __init__(self, input_size, output_size, num_img=None, dataset_info={
         'source': 'sketches',
         'target': 'original',
         'condition': 'conditions.npy',
@@ -114,8 +129,6 @@ class AutoEncoder(nn.Module):
 
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
-        elif torch.backends.mps.is_available():
-            self.device = torch.device('mps')
         else:
             self.device = torch.device('cpu')
 
@@ -136,8 +149,7 @@ class AutoEncoder(nn.Module):
 
         self.input_size = input_size
         self.output_size = output_size
-        self.projection_size = input_size[0] * input_size[1]
-        self.condition_size = condition_size
+        self.projection_size = 1024
         self.model_config = model_config
 
         self.dataset = CelebADataset({
@@ -153,85 +165,54 @@ class AutoEncoder(nn.Module):
 
 
         # Encoder layers
-        self.conv1 = nn.Conv2d(1, 64, 3)
-        self.conv2 = nn.Conv2d(64, 128, 3)
-        self.conv3 = nn.Conv2d(128, 64, 3)
-        self.max_pool = nn.MaxPool2d(2, 2)
+        self.encoder_conv1 = unetBlocks.conv_block(1, 64)
+        self.encoder_conv2 = unetBlocks.conv_block(64, 128)
+        self.encoder_conv3 = unetBlocks.conv_block(128, 256)
+        self.encoder_conv4 = unetBlocks.conv_block(256, 512)
 
-        self.condition_projection = nn.Linear(15, condition_size)
+        self.max_pool = nn.MaxPool2d(2)
 
-        # bottleneck and projection layers
-        self.bottle_neck = nn.LazyLinear(condition_size)
-        self.projection_layer = nn.Linear(condition_size, self.projection_size)
+        self.condition_projection = nn.Linear(15, self.projection_size)
         
         # Decoder layers
+        self.decoder_conv1 = unetBlocks.conv_block(512, 256)
+        self.decoder_conv2 = unetBlocks.conv_block(256, 128)
+        self.decoder_conv3 = unetBlocks.conv_block(128, 64)
 
-        self.resize_conv_block_1 = nn.Sequential(
-            nn.Upsample(scale_factor = 2, mode='bilinear'),
-            nn.ReflectionPad2d(1),
-            nn.Conv2d(2, 64, kernel_size=3, stride=1, padding=0))
-        
-        self.resize_conv_block_2 = nn.Sequential(
-            nn.Upsample(scale_factor = 2, mode='bilinear'),
-            nn.ReflectionPad2d(1),
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0))
-        
-        self.resize_conv_block_3 = nn.Sequential(
-            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=0)
-        )
+        self.decoder_upconv1 = unetBlocks.upconv_block(512, 256)
+        self.decoder_upconv2 = unetBlocks.upconv_block(256, 128)
+        self.decoder_upconv3 = unetBlocks.upconv_block(128, 64)
 
-        self.resize_conv_block_4 = nn.Sequential(
-            nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=0)
-        )
-
-
+        # Output
+        self.output_conv = nn.Conv2d(64, 3, kernel_size=1)
 
         self.to(self.device)
-
-    def encoder(self, x, condition):
-        # Encoder Forward Pass
-        x = self.conv1(x)
-        x = F.relu(x)
-        x = self.conv2(x)
-        x = F.relu(x)
-        x = self.max_pool(x)
-        x = self.conv3(x)
-        x = F.relu(x)
-        x = self.max_pool(x)
-        # high dimensional projection through linear layer
-        x = torch.flatten(x, 1)
-        x = self.bottle_neck(x)
-        x = F.relu(x)
-        condition = self.condition_projection(condition)
-        if self.model_config['condition_type'] == 'add':
-            x = torch.add(x, condition)
-        else:
-            x = torch.mul(x, condition)
-        x = self.projection_layer(x)
-        x = F.relu(x)
-        return x
-    
-    def decoder(self, encoded_representation, input):
-        x = encoded_representation.view(-1, 1, self.input_size[0], self.input_size[1])
-        if self.model_config['skip_connection']:
-            x = torch.cat((x, input), dim=1)
-        else:
-            x = x
-        x = self.resize_conv_block_1(x)
-        x = F.relu(x)
-        x = F.max_pool2d(x, 2, 2)
-        x = self.resize_conv_block_2(x)
-        x = F.relu(x)
-        x = self.resize_conv_block_3(x)
-        x = F.relu(x)
-        x = self.resize_conv_block_4(x)
-        x = F.relu(x)
-        return x
     
     def forward(self, input, condition):
-        x = self.encoder(input, condition)
-        x = self.decoder(x, input)
-        return x
+        enc1 = self.encoder_conv1(input)
+        enc2 = self.encoder_conv2(self.max_pool(enc1))
+        enc3 = self.encoder_conv3(self.max_pool(enc2))
+        enc4 = self.encoder_conv4(self.max_pool(enc3))
+
+        condition = self.condition_projection(condition)
+        condition = condition.view(-1, 1, 32, 32)
+
+        conditioned_enc4 = enc4 * condition
+
+        dec1 = self.decoder_upconv1(conditioned_enc4)
+        dec1 = torch.cat((enc3, dec1), dim=1)
+        dec1 = self.decoder_conv1(dec1)
+
+        dec2 = self.decoder_upconv2(dec1)
+        dec2 = torch.cat((enc2, dec2), dim=1)
+        dec2 = self.decoder_conv2(dec2)
+
+        dec3 = self.decoder_upconv3(dec2)
+        dec3 = torch.cat((enc1, dec3), dim=1)
+        dec3 = self.decoder_conv3(dec3)
+
+        out = self.output_conv(dec3)
+        return out
     
     def loss(self, ground_truth, output):
         loss = F.mse_loss(ground_truth, output)
@@ -340,18 +321,18 @@ if __name__ == '__main__':
     'train_split': 0.8,
     }
 
-    input_size = [128, 128]
-    output_size = [252, 252]
-    condition_size = 1024
+    input_size = [256, 256]
+    output_size = [256, 256]
 
     AE = AutoEncoder(input_size=input_size,
         output_size=output_size,
-        condition_size=condition_size,
         dataset_info=dataset_info
     )
+
     AE.train(epochs=10, 
              batch_size=128, 
              save_path='model.pth',
              gen_images=True,
              gen_images_input='generation_input/holdout_sketches',
              gen_images_output='generation_output')
+
