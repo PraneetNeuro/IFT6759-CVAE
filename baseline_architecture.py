@@ -111,6 +111,43 @@ class CelebADataset(torch.utils.data.Dataset):
             Y.append(original)
         
         return torch.stack(X), torch.stack(Y), self.test_condition_data
+    
+    def get_validation_sample(self, sample_size):
+        X = []
+        Y = []
+
+        print('LENGTH OF TEXT: ', len(self.test_X))
+
+        sample_indices = np.random.choice(len(self.test_X),sample_size,False)
+        sample_X = np.array(self.test_X)[sample_indices]
+        sample_Y = np.array(self.test_Y)[sample_indices]
+        sample_condition_vec = np.array(self.test_condition_data)[sample_indices]
+
+        for sketch_path, original_path in zip(sample_X, sample_Y):
+            sketch_path = os.path.join(self.dataset_info['source'], sketch_path)
+            sketch = cv2.imread(sketch_path, cv2.IMREAD_GRAYSCALE)
+
+            original_path = os.path.join(self.dataset_info['target'], original_path)
+            original = cv2.imread(original_path)
+
+            sketch = self.transforms['to_tensor'](sketch)
+            original = self.transforms['to_tensor'](original)
+
+            original = self.transforms['normalize_original'](original)
+            sketch = self.transforms['normalize_sketch'](sketch)
+
+            original = self.transforms['resize_original'](original)
+            sketch = self.transforms['resize_sketch'](sketch)
+
+            X.append(sketch)
+            Y.append(original)
+        
+        return torch.stack(X), torch.stack(Y), sample_condition_vec
+
+        
+        # get random permutation of images
+
+
         
 
 class AutoEncoder(nn.Module):
@@ -159,7 +196,7 @@ class AutoEncoder(nn.Module):
             'train_split': dataset_info['train_split'],
             'input_size': self.input_size,
             'output_size': output_size,
-            'num_img': 100,
+            'num_img': dataset_info['num_img'],
             'condition_size': 15,
         })
 
@@ -231,9 +268,14 @@ class AutoEncoder(nn.Module):
 
         optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
         self.dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
-        test_X, test_Y, test_condition = self.dataset.get_test_data()
+        
+        
         for epoch in range(epochs):
+            epoch_loss_train = []
+            epoch_psnr_train = []
+            epoch_ssim_train = []
             for batch_idx, (images, conditions, targets) in enumerate(self.dataloader):
+                print('\n\n\nBATCH INDEX: ', batch_idx)
                 images, targets, conditions = images.to(self.device), conditions.to(self.device), targets.to(self.device)
                 optimizer.zero_grad()
 
@@ -245,12 +287,17 @@ class AutoEncoder(nn.Module):
 
                 psnr_train = self.PSNR(output_train, targets)
                 ssim_train = self.SSIM(output_train, targets)
+
+                epoch_loss_train.append(loss_train)
+                epoch_psnr_train.append(psnr_train)
+                epoch_ssim_train.append(ssim_train)
                 
 
                 loss_train.backward()
                 optimizer.step()
 
-                print(f'Epoch {epoch} Batch {batch_idx} Loss: {loss_train}')
+                if batch_idx%10==0:
+                    print(f'Epoch {epoch+1}/{epochs} Batch {batch_idx+1} Loss: {loss_train}')
 
                 # use this block to calculate all test set metrics to avoid affecting model
 
@@ -282,6 +329,11 @@ class AutoEncoder(nn.Module):
                         cv2.imwrite(output_dir + f'/{i}.jpg', image)
                     
                 print(f'Epoch {epoch} Loss: {loss_train}')
+                
+            test_X, test_Y, test_condition = self.dataset.get_validation_sample(sample_size=32)
+            
+            # convert test_condition back to tensor
+            test_condition= torch.from_numpy(test_condition).float().view(-1, 15)
 
             with torch.no_grad():
                 test_X = test_X.to(self.device)
@@ -294,14 +346,19 @@ class AutoEncoder(nn.Module):
                 psnr_valid = self.PSNR(output_valid, test_Y)
                 ssim_valid = self.SSIM(output_valid, test_Y)
             self.save_model(save_path)
-       
+
+            
+            mean_epoch_loss_train = sum(epoch_loss_train)/len(epoch_loss_train)
+            mean_epoch_psnr_train = sum(epoch_psnr_train)/len(epoch_psnr_train)
+            mean_epoch_ssim_train = sum(epoch_ssim_train)/len(epoch_ssim_train)
+
             wandb.log({
                 "epoch": epoch+1,
-                "train-reconstruction-loss": loss_train,
+                "train-reconstruction-loss": mean_epoch_loss_train,
                 'valid-reconstruction-loss': loss_valid,
-                "train-PSNR": psnr_train,
+                "train-PSNR": mean_epoch_psnr_train,
                 'valid-PSNR': psnr_valid,
-                'train-SSIM': ssim_train,
+                'train-SSIM': mean_epoch_ssim_train,
                 'valid-SSIM': ssim_valid
              })
             
@@ -331,10 +388,11 @@ if __name__ == '__main__':
         dataset_info=dataset_info
     )
 
-    AE.train(epochs=10, 
-             batch_size=128, 
-             save_path='model.pth',
-             gen_images=True,
-             gen_images_input='generation_input/holdout_sketches',
-             gen_images_output='generation_output')
+    AE.train(
+        epochs=1, 
+        batch_size=32, 
+        save_path='model.pth',
+        gen_images=True,
+        gen_images_input='generation_input/sketches_holdout',
+        gen_images_output='generation_output')
 
