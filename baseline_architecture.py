@@ -10,6 +10,7 @@ import os
 from celeba import CelebADataset
 
 import wandb
+import yaml
 
 class unetBlocks:
     def conv_block(in_channels, out_channels):
@@ -29,62 +30,66 @@ class unetBlocks:
 
 
 class AutoEncoder(nn.Module):
-    def __init__(self, input_size, output_size, num_img=None, dataset_info={
-        'source': 'sketches',
-        'target': 'original',
-        'condition': 'conditions.npy',
-        'num_img': 29999,
-        'train_split': 0.9999,
-    }, model_config={
-        'condition': True,
-        'condition_type': 'mul',
-        'skip_connection': True,
-    }):
+    def __init__(self, config
+            # self, input_size, output_size, num_img=None, dataset_info={
+    #     'source': 'sketches',
+    #     'target': 'original',
+    #     'condition': 'conditions.npy',
+    #     'num_img': 29999,
+    #     'train_split': 0.9999,
+    # }, model_config={
+    #     'condition': True,
+    #     'condition_type': 'mul',
+    #     'skip_connection': True,
+    # }
+        ):
         super(AutoEncoder, self).__init__()
 
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
         else:
-            self.device = torch.device('mps')
+            self.device = torch.device('cpu')
+
+
+        self.data_source_info = config['data_source_info']
+        self.data_info = config['data_info']
+        self.training_info = config['training_info']
+        self.wandb_info = config['wandb_info']
+        self.image_gen_info = config['image_gen_info']
 
         # first arg denotes model version
         self.model_artifact = wandb.Artifact("baseline_test_versioning", type="model")
+
+        self.learning_rate = self.training_info['learning_rate']
+        self.batch_size = self.training_info['batch_size']
+        self.epochs = self.training_info['epochs']
 
         
         #  WANDB INITIALIZATION
         wandb.init(
             # set the wandb project where this run will be logged
-            project="sketch-VAE",
+            project=self.wandb_info['model_name'],
             
             # track hyperparameters and run metadata
             config={
-            "learning_rate": 0.02,
-            "architecture": "VAE",
-            "dataset": "beta",
-            'epochs': 8,
-            'batch_size': 32,
+            "learning_rate": self.learning_rate,
+            "architecture": self.wandb_info['architecture'],
+            "dataset": self.wandb_info['dataset'],
+            'epochs': self.epochs,
+            'batch_size': self.batch_size,
             
             }
         )
-        dataset_artifact = wandb.Artifact("test_data_version", "dataset")
+        dataset_artifact = wandb.Artifact(self.wandb_info['dataset'], "dataset")
         dataset_artifact.add_dir("model_input/sketches/")
         dataset = wandb.use_artifact(dataset_artifact)
 
-        self.input_size = input_size
-        self.output_size = output_size
-        self.projection_size = 256
-        self.model_config = model_config
+        self.input_size = self.data_info['input_size'][0]
+        self.output_size = self.data_info['output_size'][0]
+        self.projection_size = self.data_info['projection_size']
+        # self.model_config = model_config
 
-        self.dataset = CelebADataset({
-            'source': dataset_info['source'],
-            'target': dataset_info['target'],
-            'condition': dataset_info['condition'],
-            'train_split': dataset_info['train_split'],
-            'input_size': self.input_size,
-            'output_size': output_size,
-            'num_img': dataset_info['num_img'],
-            'condition_size': 1,
-        })
+        self.dataset = CelebADataset(config)
 
 
         # Encoder layers
@@ -95,7 +100,7 @@ class AutoEncoder(nn.Module):
 
         self.max_pool = nn.MaxPool2d(2)
 
-        self.condition_projection = nn.Linear(1, self.projection_size)
+        self.condition_projection = nn.Linear(self.data_info['condition_size'], self.projection_size)
         
         # Decoder layers
         self.decoder_conv1 = unetBlocks.conv_block(256, 128)
@@ -150,23 +155,24 @@ class AutoEncoder(nn.Module):
     def SSIM(self, output, ground_truth):
         ssim = structural_similarity_index_measure(output, ground_truth)
         return ssim
+    # def train(self, epochs, batch_size, save_path, gen_images = None, gen_condition = None, gen_images_input = None, gen_images_output = None
+    def train(self, ):
 
-    def train(self, epochs, batch_size, save_path, gen_images = None, gen_condition = None, gen_images_input = None, gen_images_output = None):
-
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.0001)
-        self.dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        self.dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
 
         # NOTE #######################@##
         # adjust this line after to be config arg!!!!
-        test_X, test_Y, test_condition = self.dataset.get_validation_sample(10)
+        test_X, test_Y, test_condition = self.dataset.get_validation_sample(self.data_info['validation_sample_size'])
         #######################@###
 
-
+        self.gen_image_paths = self.image_gen_info['gen_image_paths']
+        self.gen_with_condition = self.image_gen_info['gen_with_condition']
 
         test_X = test_X.to(self.device)
         test_Y = test_Y.to(self.device)
         test_condition = test_condition.to(self.device)
-        for epoch in range(epochs):
+        for epoch in range(self.epochs):
             epoch_loss = 0
             psnr_train = 0
             ssim_train = 0
@@ -192,46 +198,41 @@ class AutoEncoder(nn.Module):
 
 
 
-                if batch_idx%10==0:
-                    print(f'Epoch {epoch+1}/{epochs} Batch {batch_idx+1} Loss: {loss_train}')
-
-                # use this block to calculate all test set metrics to avoid affecting model
 
             # generate images from two sets of sketches: holdout and cuhk
-            if gen_images is not None: # boolean
+            if self.gen_image_paths is not None: # boolean
                 with torch.no_grad():
+
                     # generate test images
-                    for gen_dir in gen_images_input:
-                        image_files = os.listdir(gen_dir)
+                    for file_dir in self.gen_image_paths:
+                        image_files = os.listdir(file_dir)
                         # images = [cv2.resize(cv2.imread(os.path.join(gen_images_input, image), cv2.IMREAD_GRAYSCALE), self.input_size) for image in image_files]
                         image_files = [image for image in image_files if image.endswith('.jpg')]
-                        images = [cv2.resize(cv2.cvtColor(cv2.imread(os.path.join(gen_dir, image)), cv2.COLOR_BGR2GRAY), self.input_size) for image in image_files]
-                        images = np.array(images)
-                        images = torch.from_numpy(images).float().view(-1, 1, self.input_size[0], self.input_size[1])
+
+                        prepped_images = []
+                        for img_file in image_files:
+                            img = cv2.imread(os.path.join(file_dir, img_file))
+                            img_color = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                            prep_img = cv2.resize(img_color, (self.input_size, self.input_size))
+                            prepped_images.append(prep_img)
+
+                        prepped_images = np.array(prepped_images)
+                        prepped_images = torch.from_numpy(prepped_images).float().view(-1, 1, self.input_size, self.input_size)
                         # images = self.dataset.transforms['normalize_sketch'](images)
-                        images = images.to(self.device)
+                        prepped_images = prepped_images.to(self.device)
                         
-                        if gen_condition:
-                            conditions = np.load(gen_condition)
-                            conditions = torch.from_numpy(conditions).float().view(-1, 15).to(self.device)
+                        # need to integrate with num_img arg
+                        if self.gen_with_condition:
+                            # conditions = np.load(self.data_source_info['condition_path'])
+                            conditions = self.dataset.condition_data
+                            conditions = torch.from_numpy(conditions).float().view(-1, self.data_info['condition_size']).to(self.device)
                         else:
-                            conditions = torch.randint(0, 2, (images.shape[0], 1)).float().to(self.device)
-                        output_images = self.forward(images, conditions)
+                            conditions = torch.randint(0, 2, (prepped_images.shape[0], self.data_info['condition_size'])).float().to(self.device)
+                        output_images = self.forward(prepped_images, conditions)
                         output_images = output_images.cpu().numpy()
 
-                        output_dir = gen_images_output + f'/epoch_{epoch}'
-                        if not os.path.exists(output_dir):
-                                os.mkdir(output_dir)
-
-                        for i, image in enumerate(output_images):
-                            try:
-                                image = np.transpose(image, (1, 2, 0))
-                                cv2.imwrite(output_dir + f'/{i}.jpg', image)
-                            except:
-                                print('error saving image')
-                                continue
-                        
-                        wandb.log({f"{gen_dir.split('/')[-1]}_epoch_{epoch}_ex": [wandb.Image(np.transpose(img, (1, 2, 0))) for img in output_images]})
+                        gen_output_path = f"{file_dir.split('/')[-1]}_epoch_{epoch+1}_ex"
+                        wandb.log({gen_output_path: [wandb.Image(np.transpose(img, (1, 2, 0))) for img in output_images]})
                         
                     
                 epoch_loss = epoch_loss / len(self.dataloader)
@@ -239,21 +240,17 @@ class AutoEncoder(nn.Module):
                 ssim_train = ssim_train / len(self.dataloader)
 
 
-                print(f'Epoch {epoch} Loss: {epoch_loss}')
+                print(f'Epoch {epoch+1} Training Loss:   {epoch_loss}')
 
             with torch.no_grad():
                 output_valid = self.forward(test_X, test_condition)
                 loss_valid = self.loss(test_Y, output_valid)
-                print(f'Validation Loss: {loss_valid}')
+                print(f'Epoch {epoch+1} Validation Loss: {loss_valid}\n')
 
                 psnr_valid = self.PSNR(output_valid, test_Y)
                 ssim_valid = self.SSIM(output_valid, test_Y)
-            self.save_model(save_path)
+            self.save_model(self.training_info['save_path'])
 
-            
-            # mean_epoch_loss_train = sum(epoch_loss_train)/len(epoch_loss_train)
-            # mean_epoch_psnr_train = sum(epoch_psnr_train)/len(epoch_psnr_train)
-            # mean_epoch_ssim_train = sum(epoch_ssim_train)/len(epoch_ssim_train)
 
             wandb.log({
                 "epoch": epoch+1,
@@ -275,29 +272,11 @@ class AutoEncoder(nn.Module):
         self.load_state_dict(torch.load(path))
 
 if __name__ == '__main__':
-    dataset_info={
-    'source': 'model_input/sketches',
-    'target': 'model_input/original',
-    'condition': 'model_input/conditions.npy',
-    'num_img': 200,
-    'train_split': 0.8,
-    }
+    with open('config.yaml', "r") as yaml_file:
+        config = yaml.safe_load(yaml_file)
 
-    input_size = [128, 128]
-    output_size = [128, 128]
 
-    AE = AutoEncoder(input_size=input_size,
-        output_size=output_size,
-        dataset_info=dataset_info
-    )
+    AE = AutoEncoder(config)
 
-    AE.train(
-        epochs=3, 
-        batch_size=128, 
-        save_path='model.pth',
-        gen_images=True,
-        gen_images_input=['generation_input/sketches_holdout',
-                          'generation_input/CUHK_sketches'],
-        gen_images_output='generation_output'
-        )
+    AE.train()
 
