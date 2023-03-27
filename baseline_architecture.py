@@ -31,17 +31,7 @@ class unetBlocks:
 
 class AutoEncoder(nn.Module):
     def __init__(self, config
-            # self, input_size, output_size, num_img=None, dataset_info={
-    #     'source': 'sketches',
-    #     'target': 'original',
-    #     'condition': 'conditions.npy',
-    #     'num_img': 29999,
-    #     'train_split': 0.9999,
-    # }, model_config={
-    #     'condition': True,
-    #     'condition_type': 'mul',
-    #     'skip_connection': True,
-    # }
+
         ):
         super(AutoEncoder, self).__init__()
 
@@ -58,7 +48,9 @@ class AutoEncoder(nn.Module):
         self.image_gen_info = config['image_gen_info']
 
         # first arg denotes model version
-        self.model_artifact = wandb.Artifact("baseline_test_versioning", type="model")
+        model_name = self.wandb_info['model_name']
+        dataset_name = self.wandb_info['dataset']
+        self.model_artifact = wandb.Artifact(model_name, type="model")
 
         self.learning_rate = self.training_info['learning_rate']
         self.batch_size = self.training_info['batch_size']
@@ -68,7 +60,7 @@ class AutoEncoder(nn.Module):
         #  WANDB INITIALIZATION
         wandb.init(
             # set the wandb project where this run will be logged
-            project=self.wandb_info['model_name'],
+            project=model_name,
             
             # track hyperparameters and run metadata
             config={
@@ -80,14 +72,14 @@ class AutoEncoder(nn.Module):
             
             }
         )
-        dataset_artifact = wandb.Artifact(self.wandb_info['dataset'], "dataset")
+        dataset_artifact = wandb.Artifact(dataset_name, "dataset")
         dataset_artifact.add_dir("model_input/sketches/")
         dataset = wandb.use_artifact(dataset_artifact)
 
         self.input_size = self.data_info['input_size'][0]
         self.output_size = self.data_info['output_size'][0]
         self.projection_size = self.data_info['projection_size']
-        # self.model_config = model_config
+
 
         self.dataset = CelebADataset(config)
 
@@ -155,16 +147,47 @@ class AutoEncoder(nn.Module):
     def SSIM(self, output, ground_truth):
         ssim = structural_similarity_index_measure(output, ground_truth)
         return ssim
-    # def train(self, epochs, batch_size, save_path, gen_images = None, gen_condition = None, gen_images_input = None, gen_images_output = None
-    def train(self, ):
+    
+    def genImages(self, epoch):
+        with torch.no_grad():
+
+            # generate test images
+            for file_dir in self.gen_image_paths:
+                image_files = os.listdir(file_dir)
+                image_files = [image for image in image_files if image.endswith('.jpg')]
+
+                prepped_images = []
+                for img_file in image_files:
+                    img = cv2.imread(os.path.join(file_dir, img_file))
+                    img_color = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                    prep_img = cv2.resize(img_color, (self.input_size, self.input_size))
+                    prepped_images.append(prep_img)
+
+                prepped_images = np.array(prepped_images)
+                prepped_images = torch.from_numpy(prepped_images).float().view(-1, 1, self.input_size, self.input_size)
+                prepped_images = prepped_images.to(self.device)
+                
+                # TODO: need to integrate with num_img arg
+                if self.gen_with_condition:
+                    # conditions = np.load(self.data_source_info['condition_path'])
+                    conditions = self.dataset.condition_data
+                    conditions = torch.from_numpy(conditions).float().view(-1, self.data_info['condition_size']).to(self.device)
+                else:
+                    conditions = torch.randint(0, 2, (prepped_images.shape[0], self.data_info['condition_size'])).float().to(self.device)
+
+                output_images = self.forward(prepped_images, conditions)
+                output_images = output_images.cpu().numpy()
+
+                gen_output_path = f"{file_dir.split('/')[-1]}_epoch_{epoch+1}_ex"
+                wandb.log({gen_output_path: [wandb.Image(np.transpose(img, (1, 2, 0))) for img in output_images]})
+                        
+
+    def train(self):
 
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         self.dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
 
-        # NOTE #######################@##
-        # adjust this line after to be config arg!!!!
         test_X, test_Y, test_condition = self.dataset.get_validation_sample(self.data_info['validation_sample_size'])
-        #######################@###
 
         self.gen_image_paths = self.image_gen_info['gen_image_paths']
         self.gen_with_condition = self.image_gen_info['gen_with_condition']
@@ -184,8 +207,6 @@ class AutoEncoder(nn.Module):
 
                 output_train = self.forward(images, conditions)
 
-                # wandb.watch(self, log="all")
-
                 loss_train = self.loss(targets, output_train)
                 epoch_loss += loss_train.item()
 
@@ -196,52 +217,14 @@ class AutoEncoder(nn.Module):
                 loss_train.backward()
                 optimizer.step()
 
+            epoch_loss = epoch_loss / len(self.dataloader)
+            psnr_train = psnr_train / len(self.dataloader)
+            ssim_train = ssim_train / len(self.dataloader)
+
+            print(f'Epoch {epoch+1} Training Loss:   {epoch_loss}')
 
 
-
-            # generate images from two sets of sketches: holdout and cuhk
-            if self.gen_image_paths is not None: # boolean
-                with torch.no_grad():
-
-                    # generate test images
-                    for file_dir in self.gen_image_paths:
-                        image_files = os.listdir(file_dir)
-                        # images = [cv2.resize(cv2.imread(os.path.join(gen_images_input, image), cv2.IMREAD_GRAYSCALE), self.input_size) for image in image_files]
-                        image_files = [image for image in image_files if image.endswith('.jpg')]
-
-                        prepped_images = []
-                        for img_file in image_files:
-                            img = cv2.imread(os.path.join(file_dir, img_file))
-                            img_color = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                            prep_img = cv2.resize(img_color, (self.input_size, self.input_size))
-                            prepped_images.append(prep_img)
-
-                        prepped_images = np.array(prepped_images)
-                        prepped_images = torch.from_numpy(prepped_images).float().view(-1, 1, self.input_size, self.input_size)
-                        # images = self.dataset.transforms['normalize_sketch'](images)
-                        prepped_images = prepped_images.to(self.device)
-                        
-                        # need to integrate with num_img arg
-                        if self.gen_with_condition:
-                            # conditions = np.load(self.data_source_info['condition_path'])
-                            conditions = self.dataset.condition_data
-                            conditions = torch.from_numpy(conditions).float().view(-1, self.data_info['condition_size']).to(self.device)
-                        else:
-                            conditions = torch.randint(0, 2, (prepped_images.shape[0], self.data_info['condition_size'])).float().to(self.device)
-                        output_images = self.forward(prepped_images, conditions)
-                        output_images = output_images.cpu().numpy()
-
-                        gen_output_path = f"{file_dir.split('/')[-1]}_epoch_{epoch+1}_ex"
-                        wandb.log({gen_output_path: [wandb.Image(np.transpose(img, (1, 2, 0))) for img in output_images]})
-                        
                     
-                epoch_loss = epoch_loss / len(self.dataloader)
-                psnr_train = psnr_train / len(self.dataloader)
-                ssim_train = ssim_train / len(self.dataloader)
-
-
-                print(f'Epoch {epoch+1} Training Loss:   {epoch_loss}')
-
             with torch.no_grad():
                 output_valid = self.forward(test_X, test_condition)
                 loss_valid = self.loss(test_Y, output_valid)
@@ -249,6 +232,11 @@ class AutoEncoder(nn.Module):
 
                 psnr_valid = self.PSNR(output_valid, test_Y)
                 ssim_valid = self.SSIM(output_valid, test_Y)
+
+            # generate images
+            if self.gen_image_paths is not None: # boolean
+                self.genImages(epoch)
+
             self.save_model(self.training_info['save_path'])
 
 
@@ -256,13 +244,16 @@ class AutoEncoder(nn.Module):
                 "epoch": epoch+1,
                 "train-reconstruction-loss": epoch_loss,
                 'valid-reconstruction-loss': loss_valid,
+
                 "train-PSNR": psnr_train,
                 'valid-PSNR': psnr_valid,
                 'train-SSIM': ssim_train,
                 'valid-SSIM': ssim_valid
              })
             
+            
         wandb.log_artifact(self.model_artifact)
+
         wandb.finish()
 
     def save_model(self, path):

@@ -22,7 +22,7 @@ data_info:
   train_split: 0.8
 training_info:
   desc: Pertaining to how the model is trained
-  epochs: 13
+  epochs: 4
   batch_size: 128
   learning_rate: 0.0001
   gen_img: True
@@ -32,9 +32,10 @@ wandb_info:
   desc: Pertaining to the experiment tracking
   model_name: sketch-VAE
   architecture: VAE
-  dataset: beta
+  dataset: baseline_test_versioning
   artifact_name: test-model
   artifact_type: model
+
 image_gen_info:
   desc: Pertaining to image generation
   gen_image_paths:
