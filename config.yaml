@@ -1,47 +1,56 @@
 # config-defaults.yaml
 # sample config defaults file
 ---
-data_source_info:
-  desc: Pertaining to data sources
-  input_sketch_path: model_input/sketches
-  input_original_path: model_input/originals
-  condition_path: model_input/conditions.npy
-data_info:
-  desc: Pertaining to the size of inputs and outputs
-  input_size: 
-    - 128
-    - 128
-  output_size:
-    - 128
-    - 128
-  condition_size: 1024
-  projection_size: 256
-  condition_size: 15
-  num_img: 100
-  validation_sample_size: 20
-  train_split: 0.8
-training_info:
-  desc: Pertaining to how the model is trained
-  epochs: 3
-  batch_size: 128
-  learning_rate: 0.0001
-  gen_img: True
-  test_img_path: test.jpg
-  save_path: model_files/model.pth
-wandb_info:
-  desc: Pertaining to the experiment tracking
-  model_name: sketch-VAE
-  architecture: VAE
-  dataset: baseline_test_versioning
-  artifact_name: test-model
-  artifact_type: model
+model_save_path: model_files/model.pth
+data_source_config:
+    desc: Pertaining to data sources
+    input_sketch_path: model_input/sketches
+    input_original_path: model_input/originals
+    condition_path: model_input/conditions.npy
+data_config:
+    desc: Pertaining to the size of inputs and outputs
+    input_size: 
+        - 128
+        - 128
+    output_size:
+        - 128
+        - 128
+    projection_size: 256
+    condition_size: 15
+    num_img: 100
+    validation_sample_size: 20
+    train_split: 0.8
+wandb_config:
+    desc: Pertaining to the experiment tracking
+    project_name: sketch-VAE
+    model_name: hp_testing
+    dataset_name: baseline_test_versioning
+    artifact_name: test-model
+    artifact_type: model
+image_gen_config:
+    desc: Pertaining to image generation
+    gen_image_paths:
+        - generation_input/sketches_holdout
+        - generation_input/CUHK_sketches
+    gen_with_condition: 
+sweep_config:
+    method: random
+    parameters:
+        optimizer:
+            values:
+                - adam
+                - adamw
+                - sgd
+        epochs: 
+            value: 3
+        learning_rate:
+            distribution: uniform
+            min: 0.0
+            max: 0.01
+        batch_size: 
+            value: 128
 
-image_gen_info:
-  desc: Pertaining to image generation
-  gen_image_paths:
-      - generation_input/sketches_holdout
-      - generation_input/CUHK_sketches
-  gen_with_condition: 
+    
 
 
   

@@ -11,25 +11,24 @@ class CelebADataset(torch.utils.data.Dataset):
         super(CelebADataset, self).__init__()
 
         # get parameter dicts for the dataset from config
-        self.data_source_info = config['data_source_info']
-        self.data_info = config['data_info']
-        self.training_info = config['training_info']
-        self.wandb_info = config['wandb_info']
-        self.image_gen_info = config['image_gen_info']
+        self.data_source_config = config['data_source_config']
+        self.data_config = config['data_config']
+        # self.training_config = config['training_config']
+        self.wandb_config = config['wandb_config']
+        self.image_gen_config = config['image_gen_config']
 
         # get parameter values
-        self.num_img = self.data_info['num_img']
-        self.condition_size = self.data_info['condition_size']
-        self.original_path = self.data_source_info['input_original_path']
-        self.sketch_path = self.data_source_info['input_sketch_path']
-        self.condition_path = self.data_source_info['condition_path']
-        self.input_size = self.data_info['input_size'][0]
-        self.output_size = self.data_info['output_size'][0]
-        self.data_info = self.data_info
+        self.num_img = self.data_config['num_img']
+        self.condition_size = self.data_config['condition_size']
+        self.original_path = self.data_source_config['input_original_path']
+        self.sketch_path = self.data_source_config['input_sketch_path']
+        self.condition_path = self.data_source_config['condition_path']
+        self.input_size = self.data_config['input_size'][0]
+        self.output_size = self.data_config['output_size'][0]
 
         # Load and split images for training and testing
         self.X = sorted(os.listdir(self.sketch_path))[:self.num_img]
-        train_len = int(len(self.X) * self.data_info['train_split'])
+        train_len = int(len(self.X) * self.data_config['train_split'])
         self.train_X = self.X[0:train_len]
         self.test_X = self.X[train_len:len(self.X)]
         self.Y = sorted(os.listdir(self.original_path))[:self.num_img]
