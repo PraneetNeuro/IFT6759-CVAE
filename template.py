@@ -13,30 +13,7 @@ from celeba import CelebADataset
 import wandb
 import yaml
 
-class unetBlocks:
-    """
-    A class containing building blocks for the U-Net architecture.
 
-    Methods
-    -------
-    conv_block(in_channels, out_channels)
-        Returns a convolutional block consisting of two convolutional layers with ReLU activation.
-    upconv_block(in_channels, out_channels)
-        Returns an up-convolutional block that performs transpose convolution with ReLU activation.
-    """
-    def conv_block(in_channels, out_channels):
-        return nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True)
-        )
-
-    def upconv_block(in_channels, out_channels):
-        return nn.Sequential(
-            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
-            nn.ReLU(inplace=True)
-        )
 
 
 
@@ -77,74 +54,7 @@ class AutoEncoder(nn.Module):
         # Load CelebADataset object
         self.dataset = CelebADataset(config)
 
-        # Define encoder layers
-        self.encoder_conv1 = unetBlocks.conv_block(1, 32)
-        self.encoder_conv2 = unetBlocks.conv_block(32, 64)
-        self.encoder_conv3 = unetBlocks.conv_block(64, 128)
-        self.encoder_conv4 = unetBlocks.conv_block(128, 256)
 
-        self.max_pool = nn.MaxPool2d(2)
-
-        self.condition_projection = nn.Linear(self.data_config['condition_size'], self.projection_size)
-
-        # Define decoder layers
-        self.decoder_conv1 = unetBlocks.conv_block(256, 128)
-        self.decoder_conv2 = unetBlocks.conv_block(128, 64)
-        self.decoder_conv3 = unetBlocks.conv_block(64, 32)
-
-        self.decoder_upconv1 = unetBlocks.upconv_block(257, 128)
-        self.decoder_upconv2 = unetBlocks.upconv_block(128, 64)
-        self.decoder_upconv3 = unetBlocks.upconv_block(64, 32)
-
-        # Define output layer
-        self.output_conv = nn.Conv2d(32, 3, kernel_size=3, padding=1)
-
-        self.to(self.device)
-
-    
-    def forward(self, input, condition):
-        """
-        Forward pass of the AutoEncoder.
-
-        Args:
-            input: Input tensor of size (batch_size, 1, input_size, input_size)
-            condition: Conditional tensor of size (batch_size, condition_size)
-
-        Returns:
-            out: Output tensor of size (batch_size, 3, output_size, output_size)
-        """
-
-        # Encoder layers
-        enc1 = self.encoder_conv1(input)
-        enc2 = self.encoder_conv2(self.max_pool(enc1))
-        enc3 = self.encoder_conv3(self.max_pool(enc2))
-        enc4 = self.encoder_conv4(self.max_pool(enc3))
-
-        # Projecting the conditional data and reshaping it to match the dimensions of the encoder features
-        condition = self.condition_projection(condition)
-        condition = F.relu(condition)
-        condition = condition.view(-1, 1, 16, 16)
-
-        # Concatenating the conditioned vector with the output of the final encoder layer
-        conditioned_enc4 = torch.cat((enc4, condition), dim=1)
-
-        # Decoder layers
-        dec1 = self.decoder_upconv1(conditioned_enc4)
-        dec1 = torch.cat((enc3, dec1), dim=1)
-        dec1 = self.decoder_conv1(dec1)
-
-        dec2 = self.decoder_upconv2(dec1)
-        dec2 = torch.cat((enc2, dec2), dim=1)
-        dec2 = self.decoder_conv2(dec2)
-
-        dec3 = self.decoder_upconv3(dec2)
-        dec3 = torch.cat((enc1, dec3), dim=1)
-        dec3 = self.decoder_conv3(dec3)
-
-        # Output
-        out = self.output_conv(dec3)
-
-        return out
 
     
     def loss(self, ground_truth, output):
