@@ -7,147 +7,159 @@ import torchvision
 import numpy as np
 
 class CelebADataset(torch.utils.data.Dataset):
-    def __init__(self, dataset_info):
+    def __init__(self, config):
         super(CelebADataset, self).__init__()
 
-        num_img = dataset_info['num_img']
+        # get parameter dicts for the dataset from config
+        self.data_source_info = config['data_source_info']
+        self.data_info = config['data_info']
+        self.training_info = config['training_info']
+        self.wandb_info = config['wandb_info']
+        self.image_gen_info = config['image_gen_info']
 
-        condition_size = dataset_info['condition_size']
+        # get parameter values
+        self.num_img = self.data_info['num_img']
+        self.condition_size = self.data_info['condition_size']
+        self.original_path = self.data_source_info['input_original_path']
+        self.sketch_path = self.data_source_info['input_sketch_path']
+        self.condition_path = self.data_source_info['condition_path']
+        self.input_size = self.data_info['input_size'][0]
+        self.output_size = self.data_info['output_size'][0]
+        self.data_info = self.data_info
 
-
-        self.dataset_info = dataset_info
-
-
-        self.X = sorted(os.listdir(dataset_info['source']))[:num_img]
-
-
-
-        train_len = int(len(self.X) * dataset_info['train_split'])
-        
+        # Load and split images for training and testing
+        self.X = sorted(os.listdir(self.sketch_path))[:self.num_img]
+        train_len = int(len(self.X) * self.data_info['train_split'])
         self.train_X = self.X[0:train_len]
         self.test_X = self.X[train_len:len(self.X)]
-
-        self.Y = sorted(os.listdir(dataset_info['target']))[:num_img]
+        self.Y = sorted(os.listdir(self.original_path))[:self.num_img]
         self.train_Y = self.Y[0:train_len]
         self.test_Y = self.Y[train_len:len(self.Y)]
 
-        if dataset_info['condition'] is not None:
-            self.condition_data = np.load(dataset_info['condition'])
+        # Load the conditions data
+        if self.condition_path is not None:
+            self.condition_data = np.load(self.condition_path)
         else:
             self.condition_data = np.ones((len(self.X), 1))
-        self.condition_data = torch.from_numpy(self.condition_data).float().view(-1, condition_size)[:num_img]
 
+        # process and split conditioning data
+        self.condition_data = torch.from_numpy(self.condition_data).float().view(-1, self.condition_size)[:self.num_img]
         self.train_condition_data = self.condition_data[0:train_len]
         self.test_condition_data = self.condition_data[train_len:len(self.condition_data)]
 
+        # Check if the number of samples in sketches, original images and condition data is equal
         assert len(self.X) == len(self.Y) == self.condition_data.shape[0], 'Number of samples in X, Y and condition data must be equal'
 
         self.num_samples = self.train_condition_data.shape[0]
 
+        # Define the image preprocessing functions
         self.transforms = {
             'to_tensor': torchvision.transforms.ToTensor(),
             'normalize_original': torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
             'normalize_sketch': torchvision.transforms.Normalize(mean=[0.5], std=[0.5]),
-            'resize_original': torchvision.transforms.Resize(dataset_info['output_size']),
-            'resize_sketch': torchvision.transforms.Resize(dataset_info['input_size']),
-            'resize_bw': torchvision.transforms.Resize((16, 16)),
+            'resize_original': torchvision.transforms.Resize(self.output_size, antialias=True),
+            'resize_sketch': torchvision.transforms.Resize(self.input_size, antialias=True),
+            'resize_bw': torchvision.transforms.Resize((16, 16), antialias=True),
         }
 
+
+
     def __len__(self):
+        """
+        Returns the number of samples in the dataset
+        """
         return self.num_samples
 
     def __getitem__(self, idx):
-        sketch_path = os.path.join(self.dataset_info['source'], self.train_X[idx])
+        """
+        Gets the item at the given index `idx` in the dataset. This function is called by the PyTorch dataloader to fetch
+        the data samples to be used in training, validation or testing. 
+        
+        Args:
+        - idx (int): The index of the data sample to fetch from the dataset.
+        
+        Returns:
+        - A tuple containing the following three elements:
+            - sketch (torch.Tensor): The sketch image as a PyTorch tensor
+            - original (torch.Tensor): The original image as a PyTorch tensor. 
+            - condition_data (torch.Tensor): The condition data for the sample as a PyTorch tensor. 
+        """
+        # Load the sketch image
+        sketch_path = os.path.join(self.sketch_path, self.train_X[idx])
         sketch = cv2.imread(sketch_path, cv2.IMREAD_GRAYSCALE)
 
-        # sketch_path = os.path.join(self.dataset_info['target'], self.train_X[idx])
-        # sketch = cv2.imread(sketch_path)
-        # sketch = cv2.cvtColor(sketch, cv2.COLOR_BGR2GRAY)
-
-
-        original_path = os.path.join(self.dataset_info['target'], self.train_Y[idx])
+        # Load the original image
+        original_path = os.path.join(self.original_path, self.train_Y[idx])
         original = cv2.imread(original_path)
 
+        # Assert that the sketch and original images have the same filename
         assert sketch_path.split('/')[-1] == original_path.split('/')[-1], 'Sketch and original image must have same name'
 
+        # Convert the images to PyTorch tensors
         sketch = self.transforms['to_tensor'](sketch)
-
         original = self.transforms['to_tensor'](original)
 
-        # Sketches are already normalized, normalizing the original images will make them black
-        # original = self.transforms['normalize_original'](original)
-        # sketch = self.transforms['normalize_sketch'](sketch)
-
+        # Resize the images
         original = self.transforms['resize_original'](original)
         sketch = self.transforms['resize_sketch'](sketch)
 
-        # Golden standard with pytorch dipshit
-        # cv2.imwrite('original.png', original.permute(1, 2, 0).numpy() * 255)
+        # Get the condition data for this sample
+        condition_data = self.train_condition_data[idx]
 
-        return sketch, original, self.train_condition_data[idx]
+        return sketch, original, condition_data
     
-    def get_test_data(self):
-        X = []
-        Y = []
-        for sketch_path, original_path in zip(self.test_X, self.test_Y):
-            sketch_path = os.path.join(self.dataset_info['source'], sketch_path)
-            sketch = cv2.imread(sketch_path, cv2.IMREAD_GRAYSCALE)
 
-            original_path = os.path.join(self.dataset_info['target'], original_path)
-            original = cv2.imread(original_path)
 
-            sketch = self.transforms['to_tensor'](sketch)
-            original = self.transforms['to_tensor'](original)
-
-            original = self.transforms['normalize_original'](original)
-            sketch = self.transforms['normalize_sketch'](sketch)
-
-            original = self.transforms['resize_original'](original)
-            sketch = self.transforms['resize_sketch'](sketch)
-
-            X.append(sketch)
-            Y.append(original)
-        
-        return torch.stack(X), torch.stack(Y), self.test_condition_data
-    
     def get_validation_sample(self, sample_size):
+        """
+        Generate a validation sample of specified size by randomly selecting sketches and their corresponding original
+        images from the test set. Returns the sketches and original images in tensor format, along with their 
+        corresponding condition data.
+
+        Args:
+            sample_size (int): size of the validation sample to generate
+
+        Returns:
+            torch.Tensor: tensor of sketches
+            torch.Tensor: tensor of original images
+            torch.Tensor: tensor of condition data
+        """
         X = []
         Y = []
 
+        # Select random indices from the test set without replacement
         sample_indices = np.random.choice(len(self.test_X),sample_size,False)
+
+        # Get the filenames corresponding to the selected indices
         sample_X = np.array(self.test_X)[sample_indices]
         sample_Y = np.array(self.test_Y)[sample_indices]
         sample_condition_vec = np.array(self.test_condition_data)[sample_indices]
 
-        for sketch_path, original_path in zip(sample_X, sample_Y):
-            sketch_path = os.path.join(self.dataset_info['source'], sketch_path)
+        for sketch_file, original_file in zip(sample_X, sample_Y):
+
+            # read sketches
+            sketch_path = os.path.join(self.sketch_path, sketch_file)
             sketch = cv2.imread(sketch_path, cv2.IMREAD_GRAYSCALE)
 
-            # sketch_path = os.path.join(self.dataset_info['target'], sketch_path)
-            # sketch = cv2.imread(sketch_path)
-            # sketch = cv2.cvtColor(sketch, cv2.COLOR_BGR2GRAY)
-
-            original_path = os.path.join(self.dataset_info['target'], original_path)
+            # read target photos
+            original_path = os.path.join(self.original_path, original_file)
             original = cv2.imread(original_path)
 
+            # transform images
             sketch = self.transforms['to_tensor'](sketch)
             original = self.transforms['to_tensor'](original)
             
-            # Sketches are already normalized, normalizing the original images will make them black
-            # original = self.transforms['normalize_original'](original)
-            # sketch = self.transforms['normalize_sketch'](sketch)
-
+            # Resize the images
             original = self.transforms['resize_original'](original)
             sketch = self.transforms['resize_sketch'](sketch)
 
             X.append(sketch)
             Y.append(original)
-        
-        return torch.stack(X), torch.stack(Y), torch.from_numpy(sample_condition_vec)
-        
 
-        
-        # get random permutation of images
+        # Convert lists to tensors
+        X = torch.stack(X)
+        Y = torch.stack(Y)
+        sample_condition_vec = torch.from_numpy(sample_condition_vec)
 
-
+        return X, Y, sample_condition_vec
         
