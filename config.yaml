@@ -17,9 +17,9 @@ data_config:
         - 128
     projection_size: 256
     condition_size: 15
-    num_img: 100
-    validation_sample_size: 20
-    train_split: 0.8
+    num_img: 1000
+    validation_sample_size: 100
+    train_split: 0.9
 wandb_config:
     desc: Pertaining to the experiment tracking
     project_name: sketch-VAE
@@ -29,24 +29,29 @@ wandb_config:
     artifact_type: model
 image_gen_config:
     desc: Pertaining to image generation
-    gen_image_paths:
-        - generation_input/sketches_holdout
-        - generation_input/CUHK_sketches
+    gen_img: True
+    simple_sketch_path: generation_input/holdout_sketches_simple
+    detail_sketch_path: generation_input/holdout_sketches_detailed
+    holdout_photo_path: generation_input/holdout_photos
+
+    bad_sketch_path: generation_input/bad_sketches
+    bad_photo_path: generation_input/bad_photos
+
+    cuhk_sketch_path: generation_input/CUHK_sketches
+    cuhk_photo_path: generation_input/CUHK_photos
     gen_with_condition: 
 sweep_config:
     method: random
     parameters:
         optimizer:
             values:
-                - adam
-                - adamw
-                - sgd
+                - rmsprop
         epochs: 
-            value: 3
+            value: 10
         learning_rate:
             distribution: uniform
             min: 0.0
-            max: 0.01
+            max: 0.006
         batch_size: 
             value: 128
 
