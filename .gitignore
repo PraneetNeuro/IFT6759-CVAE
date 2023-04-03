@@ -1,8 +1,8 @@
 /env
 
 __pycache__
-*.jpg
-*.png
+model_input/
+generation_output/
 /data/celeba/img_align_celeba.zip
 *.pth
 
