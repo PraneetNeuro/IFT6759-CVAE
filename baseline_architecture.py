@@ -368,31 +368,6 @@ class AutoEncoder(nn.Module):
 
 
 
-        # name the output folder based on the input folder and epoch number, then log the output images to WandB
-        # simple_sketch_label = f"{simple_sketch_path.split('/')[-1]}_epoch_{epoch+1}"
-        # detail_sketch_label = f"{detail_sketch_path.split('/')[-1]}_epoch_{epoch+1}"
-
-        
-        # create a table for logging to wandb
-        
-
-        # simple_sketch_art = wandb.Artifact("simple_sketches" + str(wandb.run.id), type="predictions")
-        # holdout_table = wandb.Table(columns=columns)
-        # for file, sketch, photo, generation in zip(simple_files, simple_sketches, orig_photos, simple_sketch_output):
-        #     generation = wandb.Image(np.transpose(generation, (1, 2, 0))) 
-        #     holdout_table.add_data(file, sketch, photo, generation)
-
-        # simple_sketch_art.add(holdout_table, "predictions")
-        # wandb.run.log_artifact(simple_sketch_art)    
-
-        
-        
-        # bad_sketch_label = f"{bad_sketch_path.split('/')[-1]}_epoch_{epoch+1}"
-        # cuhk_sketch_label = f"{cuhk_sketch_path.split('/')[-1]}_epoch_{epoch+1}"
-
-
-        # generations = [for img in output_images]
-        # wandb.log({gen_output_path: generations})
 
 
 
