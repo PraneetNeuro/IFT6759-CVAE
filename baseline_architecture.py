@@ -189,49 +189,189 @@ class AutoEncoder(nn.Module):
         ssim = structural_similarity_index_measure(output, ground_truth)
         return ssim
     
+    def getSketches(self, sketch_path):
+        """
+        Returns a list of sketches from the given sketch path.
+
+        Args:
+        - sketch_path (str): the path to the directory containing the sketches
+
+        Returns:
+        - sketches (list): a list of sketches
+        """
+
+        prepped_sketches = []
+        sketch_files = sorted(os.listdir(sketch_path))
+        if '.DS_Store' in sketch_files:
+            sketch_files.remove('.DS_Store')
+        for sketch_file in sketch_files:
+            
+            sketch = cv2.imread(os.path.join(sketch_path, sketch_file))
+            sketch_color = cv2.cvtColor(sketch, cv2.COLOR_BGR2GRAY)
+            prepped_sketch = cv2.resize(sketch_color, (self.input_size, self.input_size))
+            prepped_sketches.append(prepped_sketch)
+
+        # convert the pre-processed images to tensors and move them to the device (GPU/CPU)
+        prepped_sketches = np.array(prepped_sketches)
+        prepped_sketches = torch.from_numpy(prepped_sketches).float().view(-1, 1, self.input_size, self.input_size)
+
+        return prepped_sketches, sketch_files
+
+  
+
+
+    
     def genImages(self, epoch):
+
         """Generates images during training and logs them to WandB.
 
         Args:
             epoch (int): The current epoch number.
         """
-        # Disable gradient calculation to speed up image generation
+
+        # read photos
+
+
+        # get "bad" photos
+        bad_photo_path = self.image_gen_config['bad_photo_path']
+        bad_photo_files = sorted(os.listdir(bad_photo_path))
+        if '.DS_Store' in bad_photo_files:
+            bad_photo_files.remove('.DS_Store')
+        bad_photos = [cv2.imread(os.path.join(bad_photo_path, img_file))for img_file in bad_photo_files]
+
+        # get CUHK photos
+        cuhk_photo_path = self.image_gen_config['cuhk_photo_path']
+        cuhk_photo_files = sorted(os.listdir(cuhk_photo_path))
+        cuhk_photos = [cv2.imread(os.path.join(cuhk_photo_path, img_file)) for img_file in cuhk_photo_files]
+
+        # get holdout photos
+        holdout_photo_path = self.image_gen_config['holdout_photo_path']
+        holdout_photo_files = sorted(os.listdir(holdout_photo_path))
+        orig_photos = [cv2.imread(os.path.join(holdout_photo_path, img_file)) for img_file in holdout_photo_files]
+
+
+
+        # read sketches
+
+        # get holdout sketches
+        simple_sketch_path = self.image_gen_config['simple_sketch_path']
+        simple_sketches, simple_sketch_files = self.getSketches(simple_sketch_path)
+        detail_sketch_path = self.image_gen_config['detail_sketch_path']
+        detail_sketches, detail_sketch_files = self.getSketches(detail_sketch_path)
+
+
+        # get "bad" sketches
+        bad_sketch_path = self.image_gen_config['bad_sketch_path']
+        bad_sketches, bad_sketch_files = self.getSketches(bad_sketch_path)
+        bad_sketches = bad_sketches.to(self.device)
+
+        # get CUHK sketches
+        cuhk_sketch_path = self.image_gen_config['cuhk_sketch_path']
+        cuhk_sketches, cuhk_sketch_files = self.getSketches(cuhk_sketch_path)
+
+            
+
+        # get the condition vectors to generate images
+        condition_size = self.data_config['condition_size']
+        if self.image_gen_config['gen_with_condition']:
+            conditions = self.dataset.condition_data
+            conditions = torch.from_numpy(conditions).float().view(-1, condition_size).to(self.device)
+        else:
+            bad_sketch_conditions    = torch.zeros(bad_sketches.shape[0], condition_size).float().to(self.device)
+            simple_sketch_conditions = torch.zeros(simple_sketches.shape[0], condition_size).float().to(self.device)
+            detail_sketch_conditions = torch.zeros(detail_sketches.shape[0], condition_size).float().to(self.device)
+            cuhk_sketch_conditions   = torch.zeros(cuhk_sketches.shape[0], condition_size).float().to(self.device)
+
+        # generate the output images using the trained model and move them to the CPU
         with torch.no_grad():
+            bad_sketch_output = self.forward(bad_sketches, bad_sketch_conditions).cpu().numpy()
+            # bad_sketch_output = bad_sketch_output.cpu().numpy()
 
-            # generate test images for each path in `gen_image_paths`
-            for file_dir in self.image_gen_config['gen_image_paths']:
+            simple_sketch_output = self.forward(simple_sketches, simple_sketch_conditions).cpu().numpy()
+            detail_sketch_output = self.forward(detail_sketches, detail_sketch_conditions).cpu().numpy()
+            cuhk_sketch_output = self.forward(cuhk_sketches, cuhk_sketch_conditions).cpu().numpy()
+        
 
-                # get the list of image files in the directory
-                image_files = os.listdir(file_dir)
-                image_files = [image for image in image_files if image.endswith('.jpg')]
+        columns = ['id', 'sketch', 'photo', 'generation']
+        
+        # bad sketch table
+        bad_sketch_table = wandb.Table(columns=columns)
+        for name, sketch, photo, generation in zip(bad_sketch_files, bad_sketches, bad_photos, bad_sketch_output):
+            _ = sketch
+            sketch = wandb.Image(sketch)
 
-                # pre-process the images
-                prepped_images = []
-                for img_file in image_files:
-                    img = cv2.imread(os.path.join(file_dir, img_file))
-                    img_color = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                    prep_img = cv2.resize(img_color, (self.input_size, self.input_size))
-                    prepped_images.append(prep_img)
+            photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
+            photo = wandb.Image(photo)
+            # [wandb.Image(cv2.cvtColor(np.transpose(img, (1, 2, 0)), cv2.COLOR_BGR2RGB)) for img in output_images]})
 
-                # convert the pre-processed images to tensors and move them to the device (GPU/CPU)
-                prepped_images = np.array(prepped_images)
-                prepped_images = torch.from_numpy(prepped_images).float().view(-1, 1, self.input_size, self.input_size)
-                prepped_images = prepped_images.to(self.device)
+            generation = np.transpose(generation, (1, 2, 0))
+            generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
+            generation = wandb.Image(generation)
 
-                # get the conditions to generate images
-                if self.image_gen_config['gen_with_condition']:
-                    conditions = self.dataset.condition_data
-                    conditions = torch.from_numpy(conditions).float().view(-1, self.data_config['condition_size']).to(self.device)
-                else:
-                    conditions = torch.randint(0, 2, (prepped_images.shape[0], self.data_config['condition_size'])).float().to(self.device)
 
-                # generate the output images using the trained model and move them to the CPU
-                output_images = self.forward(prepped_images, conditions)
-                output_images = output_images.cpu().numpy()
+            bad_sketch_table.add_data(name, sketch, photo, generation)
+        wandb.log({f"bad_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": bad_sketch_table})
 
-                # name the output folder based on the input folder and epoch number, then log the output images to WandB
-                gen_output_path = f"{file_dir.split('/')[-1]}_epoch_{epoch+1}_ex"
-                wandb.log({gen_output_path: [wandb.Image(np.transpose(img, (1, 2, 0))) for img in output_images]})
+        # CUHK sketch table
+        cuhk_sketch_table = wandb.Table(columns=columns)
+        for name, sketch, photo, generation in zip(cuhk_sketch_files, cuhk_sketches, cuhk_photos, cuhk_sketch_output):
+            _ = sketch
+            sketch = wandb.Image(sketch)
+
+            photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
+            photo = wandb.Image(photo)
+            # [wandb.Image(cv2.cvtColor(np.transpose(img, (1, 2, 0)), cv2.COLOR_BGR2RGB)) for img in output_images]})
+
+            generation = np.transpose(generation, (1, 2, 0))
+            generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
+            generation = wandb.Image(generation)
+
+
+            cuhk_sketch_table.add_data(name, sketch, photo, generation)
+        wandb.log({f"cuhk_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": cuhk_sketch_table})
+
+        # simple sketch table
+        simple_sketch_table = wandb.Table(columns=columns)
+        for name, sketch, photo, generation in zip(simple_sketch_files, simple_sketches, orig_photos, simple_sketch_output):
+            _ = sketch
+            sketch = wandb.Image(sketch)
+
+            photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
+            photo = wandb.Image(photo)
+            # [wandb.Image(cv2.cvtColor(np.transpose(img, (1, 2, 0)), cv2.COLOR_BGR2RGB)) for img in output_images]})
+
+            generation = np.transpose(generation, (1, 2, 0))
+            generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
+            generation = wandb.Image(generation)
+
+
+            simple_sketch_table.add_data(name, sketch, photo, generation)
+        wandb.log({f"simple_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": simple_sketch_table})
+
+        # simple sketch table
+        detail_sketch_table = wandb.Table(columns=columns)
+        for name, sketch, photo, generation in zip(detail_sketch_files, detail_sketches, orig_photos, detail_sketch_output):
+            _ = sketch
+            sketch = wandb.Image(sketch)
+
+            photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
+            photo = wandb.Image(photo)
+            # [wandb.Image(cv2.cvtColor(np.transpose(img, (1, 2, 0)), cv2.COLOR_BGR2RGB)) for img in output_images]})
+
+            generation = np.transpose(generation, (1, 2, 0))
+            generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
+            generation = wandb.Image(generation)
+
+
+            detail_sketch_table.add_data(name, sketch, photo, generation)
+        wandb.log({f"detil_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": detail_sketch_table})
+
+
+
+
+
+
+            
         
     def get_optimizer(self, optimizer, learning_rate):
 
@@ -244,6 +384,11 @@ class AutoEncoder(nn.Module):
         elif optimizer == "adamw":
             optimizer = torch.optim.Adam(self.parameters(),
                                 lr=learning_rate)
+        elif optimizer == 'rmsprop':
+            optimizer = torch.optim.RMSprop(self.parameters(),
+                                lr=learning_rate)
+        else:
+            raise ValueError('Optimizer not supported')
         return optimizer
     
 
@@ -330,7 +475,7 @@ class AutoEncoder(nn.Module):
                     ssim_valid = self.SSIM(output_valid, test_Y)
 
                 # Generate images if specified in configuration
-                if self.image_gen_config['gen_image_paths'] is not None:
+                if self.image_gen_config['gen_img'] is not None:
                     self.genImages(epoch)
 
                 
@@ -383,7 +528,7 @@ if __name__ == '__main__':
     AE = AutoEncoder(config)
 
     # train AutoEncoder
-    wandb.agent(sweep_id, AE.train, count=5)
+    wandb.agent(sweep_id, AE.train, count=1)
 
     # Save the trained model as an artifact in Weights and Biases
     
