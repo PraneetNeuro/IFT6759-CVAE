@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchmetrics.functional import peak_signal_noise_ratio, structural_similarity_index_measure
+import torchvision.models as models
 import numpy as np
 import cv2
 from torch.utils.data import DataLoader
@@ -12,31 +13,54 @@ from celeba import CelebADataset
 
 import wandb
 import yaml
+    
+class PerceptualLoss(nn.Module):
+    def __init__(self, layers=[3, 8, 15, 22, 29]):
+        super(PerceptualLoss, self).__init__()
+        self.vgg16 = models.vgg16(pretrained=True).features
+        self.criterion = nn.MSELoss()
+        self.layers = layers
+        for param in self.vgg16.parameters():
+            param.requires_grad = False
 
-class unetBlocks:
-    """
-    A class containing building blocks for the U-Net architecture.
+    def forward(self, x, y):
+        x_vgg, y_vgg = x, y
+        loss = 0
+        for i in range(max(self.layers) + 1):
+            x_vgg = self.vgg16[i](x_vgg)
+            y_vgg = self.vgg16[i](y_vgg)
+            if i in self.layers:
+                loss += self.criterion(x_vgg, y_vgg.detach())
+        return loss
 
-    Methods
-    -------
-    conv_block(in_channels, out_channels)
-        Returns a convolutional block consisting of two convolutional layers with ReLU activation.
-    upconv_block(in_channels, out_channels)
-        Returns an up-convolutional block that performs transpose convolution with ReLU activation.
-    """
-    def conv_block(in_channels, out_channels):
-        return nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+
+
+class UNetBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
+        super(UNetBlock, self).__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding),
+            nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True)
+            nn.Conv2d(out_channels, out_channels, kernel_size, stride, padding),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
         )
+        
+    def forward(self, x):
+        return self.block(x)
 
-    def upconv_block(in_channels, out_channels):
-        return nn.Sequential(
-            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
-            nn.ReLU(inplace=True)
+class UNetUpBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=2, stride=2):
+        super(UNetUpBlock, self).__init__()
+        self.block = nn.Sequential(
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
         )
+        
+    def forward(self, x):
+        return self.block(x)
 
 
 
@@ -77,27 +101,33 @@ class AutoEncoder(nn.Module):
         # Load CelebADataset object
         self.dataset = CelebADataset(config)
 
-        # Define encoder layers
-        self.encoder_conv1 = unetBlocks.conv_block(1, 32)
-        self.encoder_conv2 = unetBlocks.conv_block(32, 64)
-        self.encoder_conv3 = unetBlocks.conv_block(64, 128)
-        self.encoder_conv4 = unetBlocks.conv_block(128, 256)
+        # Custom loss functions
+        self.perceptual_loss = PerceptualLoss()
+        
+        # Encoder layers
+        self.enc1 = UNetBlock(1, 32)
+        self.enc2 = UNetBlock(32, 64)
+        self.enc3 = UNetBlock(64, 128)
+        self.enc4 = UNetBlock(128, 256)
 
-        self.max_pool = nn.MaxPool2d(2)
+        # Bottleneck layer
+        self.center = UNetBlock(256, 512)
 
-        self.condition_projection = nn.Linear(self.data_config['condition_size'], self.projection_size)
+        # Decoder layers
+        self.up4 = UNetUpBlock(512, 256)
+        self.dec4 = UNetBlock(256 + 256, 256) 
+        self.up3 = UNetUpBlock(256, 128)
+        self.dec3 = UNetBlock(128 + 128, 128)  
+        self.up2 = UNetUpBlock(128, 64)
+        self.dec2 = UNetBlock(64 + 64, 64)     
+        self.up1 = UNetUpBlock(64, 32)
+        self.dec1 = UNetBlock(32 + 32, 32)
 
-        # Define decoder layers
-        self.decoder_conv1 = unetBlocks.conv_block(256, 128)
-        self.decoder_conv2 = unetBlocks.conv_block(128, 64)
-        self.decoder_conv3 = unetBlocks.conv_block(64, 32)
+        # Output layer
+        self.output_conv = nn.Conv2d(32, 3, kernel_size=1)
 
-        self.decoder_upconv1 = unetBlocks.upconv_block(257, 128)
-        self.decoder_upconv2 = unetBlocks.upconv_block(128, 64)
-        self.decoder_upconv3 = unetBlocks.upconv_block(64, 32)
-
-        # Define output layer
-        self.output_conv = nn.Conv2d(32, 3, kernel_size=3, padding=1)
+        # Pooling layer for downsampling
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
         self.to(self.device)
 
@@ -114,40 +144,35 @@ class AutoEncoder(nn.Module):
             out: Output tensor of size (batch_size, 3, output_size, output_size)
         """
 
-        # Encoder layers
-        enc1 = self.encoder_conv1(input)
-        enc2 = self.encoder_conv2(self.max_pool(enc1))
-        enc3 = self.encoder_conv3(self.max_pool(enc2))
-        enc4 = self.encoder_conv4(self.max_pool(enc3))
+        # Encoder
+        enc1_out = self.enc1(input)
+        enc2_out = self.enc2(self.pool(enc1_out))
+        enc3_out = self.enc3(self.pool(enc2_out))
+        enc4_out = self.enc4(self.pool(enc3_out))
 
-        # Projecting the conditional data and reshaping it to match the dimensions of the encoder features
-        condition = self.condition_projection(condition)
-        condition = F.relu(condition)
-        condition = condition.view(-1, 1, 16, 16)
-
-        # Concatenating the conditioned vector with the output of the final encoder layer
-        conditioned_enc4 = torch.cat((enc4, condition), dim=1)
-
-        # Decoder layers
-        dec1 = self.decoder_upconv1(conditioned_enc4)
-        dec1 = torch.cat((enc3, dec1), dim=1)
-        dec1 = self.decoder_conv1(dec1)
-
-        dec2 = self.decoder_upconv2(dec1)
-        dec2 = torch.cat((enc2, dec2), dim=1)
-        dec2 = self.decoder_conv2(dec2)
-
-        dec3 = self.decoder_upconv3(dec2)
-        dec3 = torch.cat((enc1, dec3), dim=1)
-        dec3 = self.decoder_conv3(dec3)
+        # Center
+        center_out = self.center(self.pool(enc4_out))
+        
+        # Decoder
+        up4_out = self.up4(center_out)
+        up4_out = torch.cat((up4_out, enc4_out), dim=1)  # Skip connection
+        dec4_out = self.dec4(up4_out)
+        up3_out = self.up3(dec4_out)
+        up3_out = torch.cat((up3_out, enc3_out), dim=1)  # Skip connection
+        dec3_out = self.dec3(up3_out)
+        up2_out = self.up2(dec3_out)
+        up2_out = torch.cat((up2_out, enc2_out), dim=1)  # Skip connection
+        dec2_out = self.dec2(up2_out)
+        up1_out = self.up1(dec2_out)
+        up1_out = torch.cat((up1_out, enc1_out), dim=1)  # Skip connection
+        dec1_out = self.dec1(up1_out)
 
         # Output
-        out = self.output_conv(dec3)
-
-        return out
+        output = self.output_conv(dec1_out)
+        return output
 
     
-    def loss(self, ground_truth, output):
+    def loss(self, ground_truth, output, custom_loss=True):
         """
         Computes the Mean Squared Error (MSE) loss between the ground truth images and the predicted output images.
 
@@ -158,7 +183,10 @@ class AutoEncoder(nn.Module):
         Returns:
         - loss (torch.Tensor): the MSE loss between the ground truth and predicted output images
         """
-        loss = F.mse_loss(ground_truth, output)
+        if custom_loss:
+            loss = self.perceptual_loss(output, ground_truth)
+        else:
+            loss = F.mse_loss(ground_truth, output)
         return loss
 
     def PSNR(self, output, ground_truth):
@@ -392,7 +420,7 @@ class AutoEncoder(nn.Module):
         return optimizer
     
 
-    def train(self, config=None):
+    def train(self, config=None, verbose=True):
         """
         Trains the autoencoder model on the specified dataset for the specified number of epochs,
         logging loss and evaluation metrics to Weights and Biases.
@@ -456,6 +484,9 @@ class AutoEncoder(nn.Module):
                     # Compute gradients and update weights
                     loss_train.backward()
                     optimizer.step()
+
+                    if verbose:
+                        print(f'Epoch: {epoch+1}/{config.epochs} | Batch: {batch_idx+1}/{len(self.dataloader)} | Loss: {loss_train.item():.4f}')
 
                 # Compute average loss for the epoch
                 epoch_loss = epoch_loss / len(self.dataloader)
