@@ -2,6 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchmetrics.functional import peak_signal_noise_ratio, structural_similarity_index_measure
+from torchmetrics.image.inception import InceptionScore
+from torchmetrics.image.fid import FrechetInceptionDistance
+from ignite.metrics import FID, InceptionScore
+
+import torchvision
 import torchvision.models as models
 import numpy as np
 import cv2
@@ -217,6 +222,38 @@ class AutoEncoder(nn.Module):
         ssim = structural_similarity_index_measure(output, ground_truth)
         return ssim
     
+    def InceptionScore(self, output):
+        """
+        Computes the Inception Score (IS) of the predicted output images.
+
+        Args:
+        - output (torch.Tensor): a tensor representing the predicted output images
+
+        Returns:
+        - inception_score (torch.Tensor): the Inception Score of the predicted output images
+        """
+        inception = InceptionScore()
+        inception.update(output)
+        inception_score =  inception.compute()
+
+        return inception_score
+    def FIDScore(self, output, ground_truth):
+        """
+        Computes the Fréchet Inception Distance (FID) of the predicted output images.
+
+        Args:
+        - output (torch.Tensor): a tensor representing the predicted output images
+
+        Returns:
+        - fid_score (torch.Tensor): the Fréchet Inception Distance of the predicted output images
+        """
+        fid = FrechetInceptionDistance(normalize=True)
+        fid.update(ground_truth, real=True)
+        fid.update(output, real=False)
+
+        fid_score = fid.compute()
+        return fid_score
+    
     def getSketches(self, sketch_path):
         """
         Returns a list of sketches from the given sketch path.
@@ -319,31 +356,66 @@ class AutoEncoder(nn.Module):
             detail_sketch_output = self.forward(detail_sketches, detail_sketch_conditions).cpu().numpy()
             cuhk_sketch_output = self.forward(cuhk_sketches, cuhk_sketch_conditions).cpu().numpy()
         
+        # create image tables
 
-        columns = ['id', 'sketch', 'photo', 'generation']
+        columns = ['id', 'sketch', 'photo', 'generation', 'ssim', 'inception_score', 'fid']
+
+        
+        # inception = None
+        # fid = None
         
         # bad sketch table
         bad_sketch_table = wandb.Table(columns=columns)
         for name, sketch, photo, generation in zip(bad_sketch_files, bad_sketches, bad_photos, bad_sketch_output):
             _ = sketch
+            # convert photo to tensor and proper size
+            metric_photo = torch.tensor(np.transpose(photo, (2, 0, 1)))
+            metric_photo = torchvision.transforms.Resize((self.output_size, self.output_size), antialias=True)(metric_photo).to(torch.float32)
+            metric_photo = torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(metric_photo)
+            metric_photo = metric_photo.unsqueeze(0)
+            metric_gen = torch.tensor(generation).unsqueeze(0)
+            
+            ssim_score = self.SSIM(metric_gen, metric_photo)
+            inception_score = self.InceptionScore(metric_gen)
+            # fid_score = self.FIDScore(metric_gen, metric_photo)
+            fid_score = None
+            
+
+
             sketch = wandb.Image(sketch)
 
             photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
             photo = wandb.Image(photo)
             # [wandb.Image(cv2.cvtColor(np.transpose(img, (1, 2, 0)), cv2.COLOR_BGR2RGB)) for img in output_images]})
 
+            
+
             generation = np.transpose(generation, (1, 2, 0))
             generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
             generation = wandb.Image(generation)
 
 
-            bad_sketch_table.add_data(name, sketch, photo, generation)
+            
+
+            bad_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
         wandb.log({f"bad_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": bad_sketch_table})
 
         # CUHK sketch table
         cuhk_sketch_table = wandb.Table(columns=columns)
         for name, sketch, photo, generation in zip(cuhk_sketch_files, cuhk_sketches, cuhk_photos, cuhk_sketch_output):
             _ = sketch
+
+            metric_photo = torch.tensor(np.transpose(photo, (2, 0, 1)))
+            metric_photo = torchvision.transforms.Resize((self.output_size, self.output_size), antialias=True)(metric_photo).to(torch.float32)
+            metric_photo = torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(metric_photo)
+            metric_photo = metric_photo.unsqueeze(0)
+            metric_gen = torch.tensor(generation).unsqueeze(0)
+            
+            ssim_score = self.SSIM(metric_gen, metric_photo)
+            inception_score = self.InceptionScore(metric_gen)
+            # fid_score = self.FIDScore(metric_gen, metric_photo)
+            fid_score = None
+
             sketch = wandb.Image(sketch)
 
             photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
@@ -355,13 +427,26 @@ class AutoEncoder(nn.Module):
             generation = wandb.Image(generation)
 
 
-            cuhk_sketch_table.add_data(name, sketch, photo, generation)
+            cuhk_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
         wandb.log({f"cuhk_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": cuhk_sketch_table})
 
         # simple sketch table
         simple_sketch_table = wandb.Table(columns=columns)
         for name, sketch, photo, generation in zip(simple_sketch_files, simple_sketches, orig_photos, simple_sketch_output):
             _ = sketch
+
+            metric_photo = torch.tensor(np.transpose(photo, (2, 0, 1)))
+            metric_photo = torchvision.transforms.Resize((self.output_size, self.output_size), antialias=True)(metric_photo).to(torch.float32)
+            metric_photo = torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(metric_photo)
+            metric_photo = metric_photo.unsqueeze(0)
+            metric_gen = torch.tensor(generation).unsqueeze(0)
+            
+            ssim_score = self.SSIM(metric_gen, metric_photo)
+            inception_score = self.InceptionScore(metric_gen)
+            # fid_score = self.FIDScore(metric_gen, metric_photo)
+            fid_score = None
+
+
             sketch = wandb.Image(sketch)
 
             photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
@@ -373,13 +458,26 @@ class AutoEncoder(nn.Module):
             generation = wandb.Image(generation)
 
 
-            simple_sketch_table.add_data(name, sketch, photo, generation)
+            simple_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
         wandb.log({f"simple_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": simple_sketch_table})
 
         # simple sketch table
         detail_sketch_table = wandb.Table(columns=columns)
         for name, sketch, photo, generation in zip(detail_sketch_files, detail_sketches, orig_photos, detail_sketch_output):
             _ = sketch
+
+            metric_photo = torch.tensor(np.transpose(photo, (2, 0, 1)))
+            metric_photo = torchvision.transforms.Resize((self.output_size, self.output_size), antialias=True)(metric_photo).to(torch.float32)
+            metric_photo = torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(metric_photo)
+            metric_photo = metric_photo.unsqueeze(0)
+            metric_gen = torch.tensor(generation).unsqueeze(0)
+            
+            ssim_score = self.SSIM(metric_gen, metric_photo)
+            inception_score = self.InceptionScore(metric_gen)
+            # fid_score = self.FIDScore(metric_gen, metric_photo)
+            fid_score = None
+
+
             sketch = wandb.Image(sketch)
 
             photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
@@ -391,8 +489,8 @@ class AutoEncoder(nn.Module):
             generation = wandb.Image(generation)
 
 
-            detail_sketch_table.add_data(name, sketch, photo, generation)
-        wandb.log({f"detil_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": detail_sketch_table})
+            detail_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
+        wandb.log({f"detail_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": detail_sketch_table})
 
 
 
