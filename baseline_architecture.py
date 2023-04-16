@@ -136,6 +136,8 @@ class AutoEncoder(nn.Module):
 
         self.PSNR = PeakSignalNoiseRatio()
         self.SSIM = StructuralSimilarityIndexMeasure()
+        self.FID = FrechetInceptionDistance()
+        self.IS = InceptionScore()
 
         self.to(self.device)
 
@@ -196,38 +198,29 @@ class AutoEncoder(nn.Module):
         else:
             loss = F.mse_loss(ground_truth, output)
         return loss
-    
-    def InceptionScore(self, output):
+
+    def calculate_metrics(self, holdout_outputs, holdout_target):
         """
-        Computes the Inception Score (IS) of the predicted output images.
-
-        Args:
-        - output (torch.Tensor): a tensor representing the predicted output images
-
-        Returns:
-        - inception_score (torch.Tensor): the Inception Score of the predicted output images
+        Compute four metrics for validation data like hold-outs and test set. DO NOT use for training data
+        or data divided in batches.
+        :param holdout_outputs: generated images
+        :param holdout_target: originals
+        :return: ssim_score, fid_score, incept_score and psnr_score
         """
-        inception = InceptionScore()
-        inception.update(output)
-        inception_score =  inception.compute()
+        # Initialise
+        ssim = StructuralSimilarityIndexMeasure()
+        fid = FrechetInceptionDistance()
+        incept = InceptionScore()
+        psnr = PeakSignalNoiseRatio()
 
-        return inception_score
-    def FIDScore(self, output, ground_truth):
-        """
-        Computes the Fréchet Inception Distance (FID) of the predicted output images.
+        ssim.update(holdout_outputs, holdout_target)
+        fid.update(holdout_outputs, real=False)
+        fid.update(holdout_target, real=True)
+        incept.update(holdout_outputs)
+        psnr.update(holdout_outputs, holdout_target)
 
-        Args:
-        - output (torch.Tensor): a tensor representing the predicted output images
-
-        Returns:
-        - fid_score (torch.Tensor): the Fréchet Inception Distance of the predicted output images
-        """
-        fid = FrechetInceptionDistance(normalize=True)
-        fid.update(ground_truth, real=True)
-        fid.update(output, real=False)
-
-        fid_score = fid.compute()
-        return fid_score
+        ssim_score, fid_score, incept_score, psnr_score = ssim.compute(), fid.compute(), incept.compute(), psnr.compute()
+        return ssim_score, fid_score, incept_score, psnr_score
     
     def getSketches(self, sketch_path):
         """
@@ -331,10 +324,6 @@ class AutoEncoder(nn.Module):
 
         columns = ['id', 'sketch', 'photo', 'generation', 'ssim', 'inception_score', 'fid']
 
-        
-        # inception = None
-        # fid = None
-        
         # bad sketch table
         bad_sketch_table = wandb.Table(columns=columns)
         for name, sketch, photo, generation in zip(bad_sketch_files, bad_sketches, bad_photos, bad_sketch_output):
@@ -346,15 +335,7 @@ class AutoEncoder(nn.Module):
             metric_photo = metric_photo.unsqueeze(0)
             metric_gen = torch.tensor(generation).unsqueeze(0)
 
-            self.SSIM.update(metric_gen, metric_photo)
-            ssim_score = self.SSIM.compute()
-            self.SSIM.reset()
-
-            inception_score = self.InceptionScore(metric_gen)
-            # fid_score = self.FIDScore(metric_gen, metric_photo)
-            fid_score = None
-            
-
+            ssim_score, fid_score, inception_score, psnr_score = self.calculate_metrics(metric_gen, metric_photo)
 
             sketch = wandb.Image(sketch)
 
@@ -380,12 +361,7 @@ class AutoEncoder(nn.Module):
             metric_photo = metric_photo.unsqueeze(0)
             metric_gen = torch.tensor(generation).unsqueeze(0)
 
-            self.SSIM.update(metric_gen, metric_photo)
-            ssim_score = self.SSIM.compute()
-            self.SSIM.reset()
-            inception_score = self.InceptionScore(metric_gen)
-            # fid_score = self.FIDScore(metric_gen, metric_photo)
-            fid_score = None
+            ssim_score, fid_score, inception_score, psnr_score = self.calculate_metrics(metric_gen, metric_photo)
 
             sketch = wandb.Image(sketch)
 
@@ -396,7 +372,6 @@ class AutoEncoder(nn.Module):
             generation = np.transpose(generation, (1, 2, 0))
             generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
             generation = wandb.Image(generation)
-
 
             cuhk_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
         wandb.log({f"cuhk_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": cuhk_sketch_table})
@@ -412,13 +387,7 @@ class AutoEncoder(nn.Module):
             metric_photo = metric_photo.unsqueeze(0)
             metric_gen = torch.tensor(generation).unsqueeze(0)
 
-            self.SSIM.update(metric_gen, metric_photo)
-            ssim_score = self.SSIM.compute()
-            self.SSIM.reset()
-            inception_score = self.InceptionScore(metric_gen)
-            # fid_score = self.FIDScore(metric_gen, metric_photo)
-            fid_score = None
-
+            ssim_score, fid_score, inception_score, psnr_score = self.calculate_metrics(metric_gen, metric_photo)
 
             sketch = wandb.Image(sketch)
 
@@ -445,14 +414,7 @@ class AutoEncoder(nn.Module):
             metric_photo = metric_photo.unsqueeze(0)
             metric_gen = torch.tensor(generation).unsqueeze(0)
 
-            self.SSIM(metric_gen, metric_photo)
-            ssim_score = self.SSIM.compute()
-            self.SSIM.reset()
-
-            inception_score = self.InceptionScore(metric_gen)
-            # fid_score = self.FIDScore(metric_gen, metric_photo)
-            fid_score = None
-
+            ssim_score, fid_score, inception_score, psnr_score = self.calculate_metrics(metric_gen, metric_photo)
 
             sketch = wandb.Image(sketch)
 
@@ -544,6 +506,8 @@ class AutoEncoder(nn.Module):
                     # Compute evaluation metrics (PSNR and SSIM)
                     self.PSNR.update(output_train, targets)
                     self.SSIM.update(output_train, targets)
+                    self.IS.update(output_train)
+                    self.FID.update(output_train, targets)
 
                     # Compute gradients and update weights
                     loss_train.backward()
@@ -556,9 +520,13 @@ class AutoEncoder(nn.Module):
                 epoch_loss = epoch_loss / len(self.dataloader)
                 psnr_train = self.PSNR.compute()
                 ssim_train = self.SSIM.compute()
+                is_train = self.IS.compute()
+                fid_train = self.FID.compute()
 
                 self.PSNR.reset()
                 self.SSIM.reset()
+                self.IS.reset()
+                self.FID.reset()
 
                 print(f'Epoch {epoch+1} Training Loss:   {epoch_loss}')
 
@@ -568,13 +536,8 @@ class AutoEncoder(nn.Module):
                     output_valid = self.forward(test_X, test_condition)
                     loss_valid = self.loss(test_Y, output_valid)
                     print(f'Epoch {epoch+1} Validation Loss: {loss_valid}\n')
-                    self.PSNR.update(output_valid, test_Y)
-                    self.SSIM(output_valid, test_Y)
-                    psnr_valid = self.PSNR.compute()
-                    ssim_valid = self.SSIM.compute()
 
-                    self.PSNR.reset()
-                    self.SSIM.reset()
+                    ssim_valid, fid_valid, is_valid, psnr_valid = self.calculate_metrics(output_valid, test_Y)
 
                 # Generate images if specified in configuration
                 if self.image_gen_config['gen_img'] is not None:
@@ -589,7 +552,11 @@ class AutoEncoder(nn.Module):
                     "train-PSNR": psnr_train,
                     'valid-PSNR': psnr_valid,
                     'train-SSIM': ssim_train,
-                    'valid-SSIM': ssim_valid
+                    'valid-SSIM': ssim_valid,
+                    'train-FID': fid_train,
+                    'valid-FID': fid_valid,
+                    'train-IS': is_train,
+                    'valid-IS': is_valid
                     },)
 
             # Save the model
