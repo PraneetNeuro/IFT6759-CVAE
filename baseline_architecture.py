@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchmetrics.functional import peak_signal_noise_ratio, structural_similarity_index_measure
 from torchmetrics.image.inception import InceptionScore
-from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from ignite.metrics import FID, InceptionScore
 
@@ -136,7 +135,7 @@ class AutoEncoder(nn.Module):
 
         self.PSNR = PeakSignalNoiseRatio()
         self.SSIM = StructuralSimilarityIndexMeasure()
-        self.FID = FrechetInceptionDistance()
+        self.FID = FID()
         self.IS = InceptionScore()
 
         self.to(self.device)
@@ -209,7 +208,7 @@ class AutoEncoder(nn.Module):
         """
         # Initialise
         ssim = StructuralSimilarityIndexMeasure()
-        fid = FrechetInceptionDistance()
+        fid = FID()
         incept = InceptionScore()
         psnr = PeakSignalNoiseRatio()
 
