@@ -510,7 +510,8 @@ class AutoEncoder(nn.Module):
                     self.PSNR.update(output_train, targets)
                     self.SSIM.update(output_train, targets)
                     self.IS.update(output_train)
-                    self.FID.update(output_train, targets)
+                    self.FID.update(output_train, real=False)
+                    self.FID.update(targets, real=True)
 
                     # Compute gradients and update weights
                     loss_train.backward()
