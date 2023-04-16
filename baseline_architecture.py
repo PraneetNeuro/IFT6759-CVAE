@@ -2,341 +2,599 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchmetrics.functional import peak_signal_noise_ratio, structural_similarity_index_measure
+from torchmetrics.image.inception import InceptionScore
+from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
+from ignite.metrics import FID, InceptionScore
+
+import torchvision
+import torchvision.models as models
 import numpy as np
 import cv2
 from torch.utils.data import DataLoader
 import os
-import torchvision
+import pprint
+
+from celeba import CelebADataset
 
 import wandb
-
-
-class CelebADataset(torch.utils.data.Dataset):
-    def __init__(self, dataset_info):
-        super(CelebADataset, self).__init__()
-
-        condition_size = dataset_info['condition_size']
-
-        self.dataset_info = dataset_info
-
-        self.X = os.listdir(dataset_info['source'])
-        train_len = int(len(self.X) * dataset_info['train_split'])
-        
-        self.train_X = self.X[0:train_len]
-        self.test_X = self.X[train_len:len(self.X)]
-
-        self.Y = os.listdir(dataset_info['target'])
-        self.train_Y = self.Y[0:train_len]
-        self.test_Y = self.Y[train_len:len(self.Y)]
-
-        if dataset_info['condition'] is not None:
-            self.condition_data = np.load(dataset_info['condition'])
-        else:
-            self.condition_data = np.ones((len(self.X), 15))
-        self.condition_data = torch.from_numpy(self.condition_data).float().view(-1, condition_size)
-
-        self.train_condition_data = self.condition_data[0:train_len]
-        self.test_condition_data = self.condition_data[train_len:len(self.condition_data)]
-
-        assert len(self.X) == len(self.Y) == self.condition_data.shape[0], 'Number of samples in X, Y and condition data must be equal'
-
-        self.num_samples = self.train_condition_data.shape[0]
-
-        self.transforms = {
-            'to_tensor': torchvision.transforms.ToTensor(),
-            'normalize_original': torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-            'normalize_sketch': torchvision.transforms.Normalize(mean=[0.5], std=[0.5]),
-            'resize_original': torchvision.transforms.Resize(dataset_info['output_size']),
-            'resize_sketch': torchvision.transforms.Resize(dataset_info['input_size']),
-        }
-
-
-    def __len__(self):
-        return self.num_samples
-
-    def __getitem__(self, idx):
-        sketch_path = os.path.join(self.dataset_info['source'], self.train_X[idx])
-        sketch = cv2.imread(sketch_path, cv2.IMREAD_GRAYSCALE)
-
-        original_path = os.path.join(self.dataset_info['target'], self.train_Y[idx])
-        original = cv2.imread(original_path)
-
-        sketch = self.transforms['to_tensor'](sketch)
-        original = self.transforms['to_tensor'](original)
-
-        original = self.transforms['normalize_original'](original)
-        sketch = self.transforms['normalize_sketch'](sketch)
-
-        original = self.transforms['resize_original'](original)
-        sketch = self.transforms['resize_sketch'](sketch)
-
-        return sketch, original, self.train_condition_data[idx]
+import yaml
     
-    def get_test_data(self):
-        X = []
-        Y = []
-        for sketch_path, original_path in zip(self.test_X, self.test_Y):
-            sketch_path = os.path.join(self.dataset_info['source'], sketch_path)
-            sketch = cv2.imread(sketch_path, cv2.IMREAD_GRAYSCALE)
+class PerceptualLoss(nn.Module):
+    def __init__(self, layers=[3, 8, 15, 22, 29]):
+        super(PerceptualLoss, self).__init__()
+        self.vgg16 = models.vgg16(pretrained=True).features
+        self.criterion = nn.MSELoss()
+        self.layers = layers
+        for param in self.vgg16.parameters():
+            param.requires_grad = False
 
-            original_path = os.path.join(self.dataset_info['target'], original_path)
-            original = cv2.imread(original_path)
+    def forward(self, x, y):
+        x_vgg, y_vgg = x, y
+        loss = 0
+        for i in range(max(self.layers) + 1):
+            x_vgg = self.vgg16[i](x_vgg)
+            y_vgg = self.vgg16[i](y_vgg)
+            if i in self.layers:
+                loss += self.criterion(x_vgg, y_vgg.detach())
+        return loss
 
-            sketch = self.transforms['to_tensor'](sketch)
-            original = self.transforms['to_tensor'](original)
 
-            original = self.transforms['normalize_original'](original)
-            sketch = self.transforms['normalize_sketch'](sketch)
-
-            original = self.transforms['resize_original'](original)
-            sketch = self.transforms['resize_sketch'](sketch)
-
-            X.append(sketch)
-            Y.append(original)
+class UNetBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
+        super(UNetBlock, self).__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size, stride, padding),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
         
-        return torch.stack(X), torch.stack(Y), self.test_condition_data
+    def forward(self, x):
+        return self.block(x)
+
+
+class UNetUpBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=2, stride=2):
+        super(UNetUpBlock, self).__init__()
+        self.block = nn.Sequential(
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
         
+    def forward(self, x):
+        return self.block(x)
+
 
 class AutoEncoder(nn.Module):
-    def __init__(self, input_size, output_size, condition_size=1024, num_img=None, dataset_info={
-        'source': 'sketches',
-        'target': 'original',
-        'condition': 'conditions.npy',
-        'train_split': 0.95,
-    }, model_config={
-        'condition': True,
-        'condition_type': 'mul',
-        'skip_connection': True,
-    }):
+    def __init__(self, config):
+        """Instantiate an AutoEncoder object.
+
+        Args:
+            config (dict): A dictionary containing configuration information for the autoencoder.
+
+        Raises:
+            ValueError: If the configuration information is invalid.
+        """
         super(AutoEncoder, self).__init__()
 
+        # Determine whether to use a GPU or CPU
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
-        elif torch.backends.mps.is_available():
-            self.device = torch.device('mps')
         else:
             self.device = torch.device('cpu')
 
-        self.art = wandb.Artifact("baseline", type="model")
-        # art.add_file("test_model_model_weights.pt")
-        #  WANDB INITIALIZATION
-        wandb.init(
-            # set the wandb project where this run will be logged
-            project="sketch-VAE",
-            
-            # track hyperparameters and run metadata
-            config={
-            # "learning_rate": 0.02,
-            "architecture": "VAE",
-            "dataset": "beta",
-            
-            }
-        )
+        self.model_save_path = config['model_save_path']
 
-        self.input_size = input_size
-        self.output_size = output_size
-        self.projection_size = input_size[0] * input_size[1]
-        self.condition_size = condition_size
-        self.model_config = model_config
-
-        self.dataset = CelebADataset({
-            'source': dataset_info['source'],
-            'target': dataset_info['target'],
-            'condition': dataset_info['condition'],
-            'train_split': dataset_info['train_split'],
-            'input_size': self.input_size,
-            'output_size': output_size,
-            'condition_size': 15,
-        })
+        # Load configuration information
+        self.data_source_config = config['data_source_config']
+        self.data_config = config['data_config']
+        self.wandb_config = config['wandb_config']
+        self.sweep_config = config['sweep_config']
+        self.image_gen_config = config['image_gen_config']
 
 
+        
+        # Load input size, output size, and projection size information
+        self.input_size = self.data_config['input_size'][0]
+        self.output_size = self.data_config['output_size'][0]
+        self.projection_size = self.data_config['projection_size']
+
+        # Load CelebADataset object
+        self.dataset = CelebADataset(config)
+
+        # Custom loss functions
+        self.perceptual_loss = PerceptualLoss()
+        
         # Encoder layers
-        self.conv1 = nn.Conv2d(1, 64, 3)
-        self.conv2 = nn.Conv2d(64, 128, 3)
-        self.conv3 = nn.Conv2d(128, 64, 3)
-        self.max_pool = nn.MaxPool2d(2, 2)
+        self.enc1 = UNetBlock(1, 32)
+        self.enc2 = UNetBlock(32, 64)
+        self.enc3 = UNetBlock(64, 128)
+        self.enc4 = UNetBlock(128, 256)
 
-        self.condition_projection = nn.Linear(15, condition_size)
+        # Bottleneck layer
+        self.center = UNetBlock(256, 512)
 
-        # bottleneck and projection layers
-        self.bottle_neck = nn.LazyLinear(condition_size)
-        self.projection_layer = nn.Linear(condition_size, self.projection_size)
-        
         # Decoder layers
+        self.up4 = UNetUpBlock(512, 256)
+        self.dec4 = UNetBlock(256 + 256, 256) 
+        self.up3 = UNetUpBlock(256, 128)
+        self.dec3 = UNetBlock(128 + 128, 128)  
+        self.up2 = UNetUpBlock(128, 64)
+        self.dec2 = UNetBlock(64 + 64, 64)     
+        self.up1 = UNetUpBlock(64, 32)
+        self.dec1 = UNetBlock(32 + 32, 32)
 
-        self.resize_conv_block_1 = nn.Sequential(
-            nn.Upsample(scale_factor = 2, mode='bilinear'),
-            nn.ReflectionPad2d(1),
-            nn.Conv2d(2, 64, kernel_size=3, stride=1, padding=0))
-        
-        self.resize_conv_block_2 = nn.Sequential(
-            nn.Upsample(scale_factor = 2, mode='bilinear'),
-            nn.ReflectionPad2d(1),
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0))
-        
-        self.resize_conv_block_3 = nn.Sequential(
-            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=0)
-        )
+        # Output layer
+        self.output_conv = nn.Conv2d(32, 3, kernel_size=1)
 
-        self.resize_conv_block_4 = nn.Sequential(
-            nn.Conv2d(64, 3, kernel_size=3, stride=1, padding=0)
-        )
+        # Pooling layer for downsampling
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        # # dummy pass to initialize watch:
-        # with torch.no_grad():
-        #     dummy_batch = self.train_X[:1]
-        #     dummy_cond = self.train_condition[:1]
-        #     _ = self.forward(dummy_batch, dummy_cond)
-
-        # wandb.watch(self, self.loss, log="all")
-
-        self.PSNR_train = PeakSignalNoiseRatio()
-        self.PSNR_test = PeakSignalNoiseRatio()
-
-        self.SSIM_train = StructuralSimilarityIndexMeasure()
-        self.SSIM_test = StructuralSimilarityIndexMeasure()
+        self.PSNR = PeakSignalNoiseRatio()
+        self.SSIM = StructuralSimilarityIndexMeasure()
 
         self.to(self.device)
 
-    def encoder(self, x, condition):
-        # Encoder Forward Pass
-        x = self.conv1(x)
-        x = F.relu(x)
-        x = self.conv2(x)
-        x = F.relu(x)
-        x = self.max_pool(x)
-        x = self.conv3(x)
-        x = F.relu(x)
-        x = self.max_pool(x)
-        # high dimensional projection through linear layer
-        x = torch.flatten(x, 1)
-        x = self.bottle_neck(x)
-        x = F.relu(x)
-        condition = self.condition_projection(condition)
-        if self.model_config['condition_type'] == 'add':
-            x = torch.add(x, condition)
-        else:
-            x = torch.mul(x, condition)
-        x = self.projection_layer(x)
-        x = F.relu(x)
-        return x
-    
-    def decoder(self, encoded_representation, input):
-        x = encoded_representation.view(-1, 1, self.input_size[0], self.input_size[1])
-        if self.model_config['skip_connection']:
-            x = torch.cat((x, input), dim=1)
-        else:
-            x = x
-        x = self.resize_conv_block_1(x)
-        x = F.relu(x)
-        x = F.max_pool2d(x, 2, 2)
-        x = self.resize_conv_block_2(x)
-        x = F.relu(x)
-        x = self.resize_conv_block_3(x)
-        x = F.relu(x)
-        x = self.resize_conv_block_4(x)
-        x = F.relu(x)
-        return x
     
     def forward(self, input, condition):
-        x = self.encoder(input, condition)
-        x = self.decoder(x, input)
-        return x
+        """
+        Forward pass of the AutoEncoder.
+
+        Args:
+            input: Input tensor of size (batch_size, 1, input_size, input_size)
+            condition: Conditional tensor of size (batch_size, condition_size)
+
+        Returns:
+            out: Output tensor of size (batch_size, 3, output_size, output_size)
+        """
+
+        # Encoder
+        enc1_out = self.enc1(input)
+        enc2_out = self.enc2(self.pool(enc1_out))
+        enc3_out = self.enc3(self.pool(enc2_out))
+        enc4_out = self.enc4(self.pool(enc3_out))
+
+        # Center
+        center_out = self.center(self.pool(enc4_out))
+        
+        # Decoder
+        up4_out = self.up4(center_out)
+        up4_out = torch.cat((up4_out, enc4_out), dim=1)  # Skip connection
+        dec4_out = self.dec4(up4_out)
+        up3_out = self.up3(dec4_out)
+        up3_out = torch.cat((up3_out, enc3_out), dim=1)  # Skip connection
+        dec3_out = self.dec3(up3_out)
+        up2_out = self.up2(dec3_out)
+        up2_out = torch.cat((up2_out, enc2_out), dim=1)  # Skip connection
+        dec2_out = self.dec2(up2_out)
+        up1_out = self.up1(dec2_out)
+        up1_out = torch.cat((up1_out, enc1_out), dim=1)  # Skip connection
+        dec1_out = self.dec1(up1_out)
+
+        # Output
+        output = self.output_conv(dec1_out)
+        return output
+
     
-    def loss(self, ground_truth, output):
-        loss = F.mse_loss(ground_truth, output)
+    def loss(self, ground_truth, output, custom_loss=True):
+        """
+        Computes the Mean Squared Error (MSE) loss between the ground truth images and the predicted output images.
+
+        Args:
+        - ground_truth (torch.Tensor): a tensor representing the ground truth images
+        - output (torch.Tensor): a tensor representing the predicted output images
+
+        Returns:
+        - loss (torch.Tensor): the MSE loss between the ground truth and predicted output images
+        """
+        if custom_loss:
+            loss = self.perceptual_loss(output, ground_truth)
+        else:
+            loss = F.mse_loss(ground_truth, output)
         return loss
+    
+    def InceptionScore(self, output):
+        """
+        Computes the Inception Score (IS) of the predicted output images.
 
-    def train(self, epochs, batch_size, save_path, gen_images=None, gen_condition=None):
+        Args:
+        - output (torch.Tensor): a tensor representing the predicted output images
 
-        # # dummy pass to initialize watch:
-        # with torch.no_grad():
-        #     dummy_batch = self.train_X[:1]
-        #     # dummy_cond = np.zeros((len(self.X), self.condition_size))
-        #     dummy_cond = self.train_condition[:1]
-        #     _ = self.forward(dummy_batch, dummy_cond)
+        Returns:
+        - inception_score (torch.Tensor): the Inception Score of the predicted output images
+        """
+        inception = InceptionScore()
+        inception.update(output)
+        inception_score =  inception.compute()
 
-        # wandb.watch(self, self.loss, log="all")
+        return inception_score
+    def FIDScore(self, output, ground_truth):
+        """
+        Computes the Fréchet Inception Distance (FID) of the predicted output images.
 
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
-        self.dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
-        test_X, test_Y, test_condition = self.dataset.get_test_data()
-        for epoch in range(epochs):
-            for batch_idx, (images, conditions, targets) in enumerate(self.dataloader):
-                images, targets, conditions = images.to(self.device), conditions.to(self.device), targets.to(self.device)
-                optimizer.zero_grad()
+        Args:
+        - output (torch.Tensor): a tensor representing the predicted output images
 
-                output_train = self.forward(images, conditions)
-                
-                wandb.watch(self, log="all")
+        Returns:
+        - fid_score (torch.Tensor): the Fréchet Inception Distance of the predicted output images
+        """
+        fid = FrechetInceptionDistance(normalize=True)
+        fid.update(ground_truth, real=True)
+        fid.update(output, real=False)
 
-                loss_train = self.loss(targets, output_train)
+        fid_score = fid.compute()
+        return fid_score
+    
+    def getSketches(self, sketch_path):
+        """
+        Returns a list of sketches from the given sketch path.
 
-                self.PSNR_train.update(output_train, targets)
-                self.SSIM_train.uptdate(output_train, targets)
-                
+        Args:
+        - sketch_path (str): the path to the directory containing the sketches
 
-                loss_train.backward()
-                optimizer.step()
+        Returns:
+        - sketches (list): a list of sketches
+        """
 
-                print(f'Epoch {epoch} Batch {batch_idx} Loss: {loss_train}')
-            psnr_train = self.PSNR_train.compute()
-            ssim_train = self.SSIM_train.compute()
-
-            self.PSNR_train.reset()
-            self.SSIM_train.reset()
-                # use this block to calculate all test set metrics to avoid affecting model
-            if gen_images:
-                with torch.no_grad():
-                    # generate test images
-                    images = os.listdir(gen_images)
-                    images = [cv2.resize(cv2.imread(os.path.join(gen_images, image), cv2.IMREAD_GRAYSCALE), self.input_size) for image in images]
-                    images = np.array(images)
-                    images = images - np.mean(images) / np.std(images)
-                    images = torch.from_numpy(images).float().view(-1, 1, self.input_size, self.input_size).to(self.device)
-                    
-                    if gen_condition:
-                        conditions = np.load(gen_condition)
-                        conditions = torch.from_numpy(conditions).float().view(-1, 15).to(self.device)
-                    else:
-                        conditions = torch.ones((1, 15)).to(self.device)
-                    gen_images = self.forward(images, conditions)
-                    gen_images = gen_images.numpy().reshape(-1, 252, 252, 3)
-                    for i, image in enumerate(gen_images):
-                        if not os.path.exists('gen_images'):
-                            os.mkdir('gen_images')
-                        cv2.imwrite(f'gen_images/{i}.jpg', image)
-                
-            print(f'Epoch {epoch} Loss: {loss_train}')
-
-            with torch.no_grad():
-                test_X = test_X.to(self.device)
-                test_Y = test_Y.to(self.device)
-                test_condition = test_condition.to(self.device)
-                output_valid = self.forward(test_X, test_condition)
-                loss_valid = self.loss(test_Y, output_valid)
-                print(f'Validation Loss: {loss_valid}')
-                self.PSNR_test.updata(output_valid, test_Y)
-                self.SSIM_test.update(output_valid, test_Y)
-                psnr_valid = self.PSNR_test.compute()
-                ssim_valid = self.SSIM_test.compute()
-                self.PSNR_test.reset()
-                self.SSIM_test.reset()
-            self.save_model(save_path)
-       
-            wandb.log({
-                "epoch": epoch+1,
-                "train-reconstruction-loss": loss_train,
-                'valid-reconstruction-loss': loss_valid,
-                "train-PSNR": psnr_train,
-                'valid-PSNR': psnr_valid,
-                'train-SSIM': ssim_train,
-                'valid-SSIM': ssim_valid
-             })
+        prepped_sketches = []
+        sketch_files = sorted(os.listdir(sketch_path))
+        if '.DS_Store' in sketch_files:
+            sketch_files.remove('.DS_Store')
+        for sketch_file in sketch_files:
             
-        wandb.log_artifact(self.art)
-        wandb.finish()
+            sketch = cv2.imread(os.path.join(sketch_path, sketch_file))
+            sketch_color = cv2.cvtColor(sketch, cv2.COLOR_BGR2GRAY)
+            prepped_sketch = cv2.resize(sketch_color, (self.input_size, self.input_size))
+            prepped_sketches.append(prepped_sketch)
+
+        # convert the pre-processed images to tensors and move them to the device (GPU/CPU)
+        prepped_sketches = np.array(prepped_sketches)
+        prepped_sketches = torch.from_numpy(prepped_sketches).float().view(-1, 1, self.input_size, self.input_size)
+
+        return prepped_sketches, sketch_files
+    
+    def genImages(self, epoch):
+
+        """Generates images during training and logs them to WandB.
+
+        Args:
+            epoch (int): The current epoch number.
+        """
+
+        # read photos
+
+
+        # get "bad" photos
+        bad_photo_path = self.image_gen_config['bad_photo_path']
+        bad_photo_files = sorted(os.listdir(bad_photo_path))
+        if '.DS_Store' in bad_photo_files:
+            bad_photo_files.remove('.DS_Store')
+        bad_photos = [cv2.imread(os.path.join(bad_photo_path, img_file))for img_file in bad_photo_files]
+
+        # get CUHK photos
+        cuhk_photo_path = self.image_gen_config['cuhk_photo_path']
+        cuhk_photo_files = sorted(os.listdir(cuhk_photo_path))
+        cuhk_photos = [cv2.imread(os.path.join(cuhk_photo_path, img_file)) for img_file in cuhk_photo_files]
+
+        # get holdout photos
+        holdout_photo_path = self.image_gen_config['holdout_photo_path']
+        holdout_photo_files = sorted(os.listdir(holdout_photo_path))
+        orig_photos = [cv2.imread(os.path.join(holdout_photo_path, img_file)) for img_file in holdout_photo_files]
+
+
+
+        # read sketches
+
+        # get holdout sketches
+        simple_sketch_path = self.image_gen_config['simple_sketch_path']
+        simple_sketches, simple_sketch_files = self.getSketches(simple_sketch_path)
+        detail_sketch_path = self.image_gen_config['detail_sketch_path']
+        detail_sketches, detail_sketch_files = self.getSketches(detail_sketch_path)
+
+
+        # get "bad" sketches
+        bad_sketch_path = self.image_gen_config['bad_sketch_path']
+        bad_sketches, bad_sketch_files = self.getSketches(bad_sketch_path)
+        bad_sketches = bad_sketches.to(self.device)
+
+        # get CUHK sketches
+        cuhk_sketch_path = self.image_gen_config['cuhk_sketch_path']
+        cuhk_sketches, cuhk_sketch_files = self.getSketches(cuhk_sketch_path)
+
+            
+
+        # get the condition vectors to generate images
+        condition_size = self.data_config['condition_size']
+        if self.image_gen_config['gen_with_condition']:
+            conditions = self.dataset.condition_data
+            conditions = torch.from_numpy(conditions).float().view(-1, condition_size).to(self.device)
+        else:
+            bad_sketch_conditions    = torch.zeros(bad_sketches.shape[0], condition_size).float().to(self.device)
+            simple_sketch_conditions = torch.zeros(simple_sketches.shape[0], condition_size).float().to(self.device)
+            detail_sketch_conditions = torch.zeros(detail_sketches.shape[0], condition_size).float().to(self.device)
+            cuhk_sketch_conditions   = torch.zeros(cuhk_sketches.shape[0], condition_size).float().to(self.device)
+
+        # generate the output images using the trained model and move them to the CPU
+        with torch.no_grad():
+            bad_sketch_output = self.forward(bad_sketches, bad_sketch_conditions).cpu().numpy()
+            # bad_sketch_output = bad_sketch_output.cpu().numpy()
+
+            simple_sketch_output = self.forward(simple_sketches, simple_sketch_conditions).cpu().numpy()
+            detail_sketch_output = self.forward(detail_sketches, detail_sketch_conditions).cpu().numpy()
+            cuhk_sketch_output = self.forward(cuhk_sketches, cuhk_sketch_conditions).cpu().numpy()
+        
+        # create image tables
+
+        columns = ['id', 'sketch', 'photo', 'generation', 'ssim', 'inception_score', 'fid']
+
+        
+        # inception = None
+        # fid = None
+        
+        # bad sketch table
+        bad_sketch_table = wandb.Table(columns=columns)
+        for name, sketch, photo, generation in zip(bad_sketch_files, bad_sketches, bad_photos, bad_sketch_output):
+            _ = sketch
+            # convert photo to tensor and proper size
+            metric_photo = torch.tensor(np.transpose(photo, (2, 0, 1)))
+            metric_photo = torchvision.transforms.Resize((self.output_size, self.output_size), antialias=True)(metric_photo).to(torch.float32)
+            metric_photo = torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(metric_photo)
+            metric_photo = metric_photo.unsqueeze(0)
+            metric_gen = torch.tensor(generation).unsqueeze(0)
+
+            self.SSIM.update(metric_gen, metric_photo)
+            ssim_score = self.SSIM.compute()
+            self.SSIM.reset()
+
+            inception_score = self.InceptionScore(metric_gen)
+            # fid_score = self.FIDScore(metric_gen, metric_photo)
+            fid_score = None
+            
+
+
+            sketch = wandb.Image(sketch)
+
+            photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
+            photo = wandb.Image(photo)
+            # [wandb.Image(cv2.cvtColor(np.transpose(img, (1, 2, 0)), cv2.COLOR_BGR2RGB)) for img in output_images]})
+
+            generation = np.transpose(generation, (1, 2, 0))
+            generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
+            generation = wandb.Image(generation)
+
+            bad_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
+        wandb.log({f"bad_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": bad_sketch_table})
+
+        # CUHK sketch table
+        cuhk_sketch_table = wandb.Table(columns=columns)
+        for name, sketch, photo, generation in zip(cuhk_sketch_files, cuhk_sketches, cuhk_photos, cuhk_sketch_output):
+            _ = sketch
+
+            metric_photo = torch.tensor(np.transpose(photo, (2, 0, 1)))
+            metric_photo = torchvision.transforms.Resize((self.output_size, self.output_size), antialias=True)(metric_photo).to(torch.float32)
+            metric_photo = torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(metric_photo)
+            metric_photo = metric_photo.unsqueeze(0)
+            metric_gen = torch.tensor(generation).unsqueeze(0)
+
+            self.SSIM.update(metric_gen, metric_photo)
+            ssim_score = self.SSIM.compute()
+            self.SSIM.reset()
+            inception_score = self.InceptionScore(metric_gen)
+            # fid_score = self.FIDScore(metric_gen, metric_photo)
+            fid_score = None
+
+            sketch = wandb.Image(sketch)
+
+            photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
+            photo = wandb.Image(photo)
+            # [wandb.Image(cv2.cvtColor(np.transpose(img, (1, 2, 0)), cv2.COLOR_BGR2RGB)) for img in output_images]})
+
+            generation = np.transpose(generation, (1, 2, 0))
+            generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
+            generation = wandb.Image(generation)
+
+
+            cuhk_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
+        wandb.log({f"cuhk_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": cuhk_sketch_table})
+
+        # simple sketch table
+        simple_sketch_table = wandb.Table(columns=columns)
+        for name, sketch, photo, generation in zip(simple_sketch_files, simple_sketches, orig_photos, simple_sketch_output):
+            _ = sketch
+
+            metric_photo = torch.tensor(np.transpose(photo, (2, 0, 1)))
+            metric_photo = torchvision.transforms.Resize((self.output_size, self.output_size), antialias=True)(metric_photo).to(torch.float32)
+            metric_photo = torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(metric_photo)
+            metric_photo = metric_photo.unsqueeze(0)
+            metric_gen = torch.tensor(generation).unsqueeze(0)
+
+            self.SSIM.update(metric_gen, metric_photo)
+            ssim_score = self.SSIM.compute()
+            self.SSIM.reset()
+            inception_score = self.InceptionScore(metric_gen)
+            # fid_score = self.FIDScore(metric_gen, metric_photo)
+            fid_score = None
+
+
+            sketch = wandb.Image(sketch)
+
+            photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
+            photo = wandb.Image(photo)
+            # [wandb.Image(cv2.cvtColor(np.transpose(img, (1, 2, 0)), cv2.COLOR_BGR2RGB)) for img in output_images]})
+
+            generation = np.transpose(generation, (1, 2, 0))
+            generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
+            generation = wandb.Image(generation)
+
+
+            simple_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
+        wandb.log({f"simple_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": simple_sketch_table})
+
+        # simple sketch table
+        detail_sketch_table = wandb.Table(columns=columns)
+        for name, sketch, photo, generation in zip(detail_sketch_files, detail_sketches, orig_photos, detail_sketch_output):
+            _ = sketch
+
+            metric_photo = torch.tensor(np.transpose(photo, (2, 0, 1)))
+            metric_photo = torchvision.transforms.Resize((self.output_size, self.output_size), antialias=True)(metric_photo).to(torch.float32)
+            metric_photo = torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(metric_photo)
+            metric_photo = metric_photo.unsqueeze(0)
+            metric_gen = torch.tensor(generation).unsqueeze(0)
+
+            self.SSIM(metric_gen, metric_photo)
+            ssim_score = self.SSIM.compute()
+            self.SSIM.reset()
+
+            inception_score = self.InceptionScore(metric_gen)
+            # fid_score = self.FIDScore(metric_gen, metric_photo)
+            fid_score = None
+
+
+            sketch = wandb.Image(sketch)
+
+            photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
+            photo = wandb.Image(photo)
+            # [wandb.Image(cv2.cvtColor(np.transpose(img, (1, 2, 0)), cv2.COLOR_BGR2RGB)) for img in output_images]})
+
+            generation = np.transpose(generation, (1, 2, 0))
+            generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
+            generation = wandb.Image(generation)
+
+
+            detail_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
+        wandb.log({f"detail_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": detail_sketch_table})
+    def get_optimizer(self, optimizer, learning_rate):
+
+        if optimizer == "sgd":
+            optimizer = torch.optim.SGD(self.parameters(),
+                              lr=learning_rate, momentum=0.9)
+        elif optimizer == "adam":
+            optimizer = torch.optim.Adam(self.parameters(),
+                                lr=learning_rate)
+        elif optimizer == "adamw":
+            optimizer = torch.optim.Adam(self.parameters(),
+                                lr=learning_rate)
+        elif optimizer == 'rmsprop':
+            optimizer = torch.optim.RMSprop(self.parameters(),
+                                lr=learning_rate)
+        else:
+            raise ValueError('Optimizer not supported')
+        return optimizer
+    
+
+    def train(self, config=None, verbose=True):
+        """
+        Trains the autoencoder model on the specified dataset for the specified number of epochs,
+        logging loss and evaluation metrics to Weights and Biases.
+        """
+        wandb_config = self.wandb_config
+        sweep_config = self.sweep_config
+
+        model_name = wandb_config['model_name']
+        dataset_name = wandb_config['dataset_name']
+
+        # Initialize Weights and Biases artifact for model
+        model_artifact = wandb.Artifact(model_name, type="model")
+
+        # Load dataset artifact and dataset information
+        dataset_artifact = wandb.Artifact(dataset_name, "dataset")
+        dataset_artifact.add_dir("model_input/sketches/")
+        # wandb.use_artifact(dataset_artifact)
+
+        with wandb.init(config=sweep_config):
+
+            config = wandb.config
+            
+            #optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+            optimizer = self.get_optimizer(optimizer = config.optimizer, 
+                                           learning_rate = config.learning_rate)
+
+            self.dataloader = DataLoader(self.dataset, 
+                                         batch_size=config.batch_size, 
+                                         shuffle=True)
+
+            # Get a validation sample from the dataset for evaluation
+            test_X, test_Y, test_condition = self.dataset.get_validation_sample(self.data_config['validation_sample_size'])
+
+            # Convert validation data to device (CPU or GPU)
+            test_X = test_X.to(self.device)
+            test_Y = test_Y.to(self.device)
+            test_condition = test_condition.to(self.device)
+
+            # Loop through each epoch
+            for epoch in range(config.epochs):
+                epoch_loss = 0
+
+                # Loop through each batch in the training data
+                for batch_idx, (images, conditions, targets) in enumerate(self.dataloader):
+                    images, targets, conditions = images.to(self.device), conditions.to(self.device), targets.to(self.device)
+                    optimizer.zero_grad()
+
+                    # Generate output from the autoencoder
+                    output_train = self.forward(images, conditions)
+
+                    # Compute the loss
+                    loss_train = self.loss(targets, output_train)
+                    epoch_loss += loss_train.item()
+
+                    # Compute evaluation metrics (PSNR and SSIM)
+                    self.PSNR.update(output_train, targets)
+                    self.SSIM.update(output_train, targets)
+
+                    # Compute gradients and update weights
+                    loss_train.backward()
+                    optimizer.step()
+
+                    if verbose:
+                        print(f'Epoch: {epoch+1}/{config.epochs} | Batch: {batch_idx+1}/{len(self.dataloader)} | Loss: {loss_train.item():.4f}')
+
+                # Compute average loss for the epoch
+                epoch_loss = epoch_loss / len(self.dataloader)
+                psnr_train = self.PSNR.compute()
+                ssim_train = self.SSIM.compute()
+
+                self.PSNR.reset()
+                self.SSIM.reset()
+
+                print(f'Epoch {epoch+1} Training Loss:   {epoch_loss}')
+
+                # calculate validation loss and metrics
+                
+                with torch.no_grad():
+                    output_valid = self.forward(test_X, test_condition)
+                    loss_valid = self.loss(test_Y, output_valid)
+                    print(f'Epoch {epoch+1} Validation Loss: {loss_valid}\n')
+                    self.PSNR.update(output_valid, test_Y)
+                    self.SSIM(output_valid, test_Y)
+                    psnr_valid = self.PSNR.compute()
+                    ssim_valid = self.SSIM.compute()
+
+                    self.PSNR.reset()
+                    self.SSIM.reset()
+
+                # Generate images if specified in configuration
+                if self.image_gen_config['gen_img'] is not None:
+                    self.genImages(epoch)
+
+                # Log metrics to Weights and Biases
+                wandb.log({
+                    "epoch": epoch,
+                    "train-reconstruction-loss": epoch_loss,
+                    'valid-reconstruction-loss': loss_valid,
+
+                    "train-PSNR": psnr_train,
+                    'valid-PSNR': psnr_valid,
+                    'train-SSIM': ssim_train,
+                    'valid-SSIM': ssim_valid
+                    },)
+
+            # Save the model
+            self.save_model(self.model_save_path)
+            wandb.log_artifact(model_artifact)
 
     def save_model(self, path):
         torch.save(self.state_dict(), path)
@@ -344,6 +602,35 @@ class AutoEncoder(nn.Module):
     def load_model(self, path):
         self.load_state_dict(torch.load(path))
 
+
 if __name__ == '__main__':
-    ae = AutoEncoder(input_size=(128, 128), output_size=(252, 252), condition_size=1024)
-    ae.train(epochs=10, batch_size=128, save_path='model.pth')
+    # read config
+    with open('config.yaml', "r") as yaml_file:
+        config = yaml.safe_load(yaml_file)
+
+    wandb_config = config['wandb_config']
+    sweep_config = config['sweep_config']
+
+    
+
+    pprint.pprint(sweep_config)
+
+    # Define model name and dataset name for Weights and Biases
+    project_name = wandb_config['project_name']
+    
+
+    # establish sweep id
+    sweep_id = wandb.sweep(sweep_config, project=project_name)
+
+    # instantiate AutoEncoder
+    AE = AutoEncoder(config)
+
+    # train AutoEncoder
+    wandb.agent(sweep_id, AE.train, count=1)
+
+    # Save the trained model as an artifact in Weights and Biases
+    
+
+    # End the Weights and Biases session
+    wandb.finish()
+
