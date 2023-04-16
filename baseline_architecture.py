@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchmetrics.functional import peak_signal_noise_ratio, structural_similarity_index_measure
+from torchmetrics import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 import numpy as np
 import cv2
 from torch.utils.data import DataLoader
@@ -9,6 +10,7 @@ import os
 import torchvision
 
 import wandb
+
 
 class CelebADataset(torch.utils.data.Dataset):
     def __init__(self, dataset_info):
@@ -48,6 +50,7 @@ class CelebADataset(torch.utils.data.Dataset):
             'resize_original': torchvision.transforms.Resize(dataset_info['output_size']),
             'resize_sketch': torchvision.transforms.Resize(dataset_info['input_size']),
         }
+
 
     def __len__(self):
         return self.num_samples
@@ -188,6 +191,12 @@ class AutoEncoder(nn.Module):
 
         # wandb.watch(self, self.loss, log="all")
 
+        self.PSNR_train = PeakSignalNoiseRatio()
+        self.PSNR_test = PeakSignalNoiseRatio()
+
+        self.SSIM_train = StructuralSimilarityIndexMeasure()
+        self.SSIM_test = StructuralSimilarityIndexMeasure()
+
         self.to(self.device)
 
     def encoder(self, x, condition):
@@ -239,14 +248,6 @@ class AutoEncoder(nn.Module):
         loss = F.mse_loss(ground_truth, output)
         return loss
 
-    def PSNR(self, output, ground_truth):
-        psnr = peak_signal_noise_ratio(output, ground_truth)
-        return psnr
-    
-    def SSIM(self, output, ground_truth):
-        ssim = structural_similarity_index_measure(output, ground_truth)
-        return ssim
-
     def train(self, epochs, batch_size, save_path, gen_images = None, gen_condition = None):
 
         # # dummy pass to initialize watch:
@@ -272,15 +273,19 @@ class AutoEncoder(nn.Module):
 
                 loss_train = self.loss(targets, output_train)
 
-                psnr_train = self.PSNR(output_train, targets)
-                ssim_train = self.SSIM(output_train, targets)
+                self.PSNR_train.update(output_train, targets)
+                self.SSIM_train.uptdate(output_train, targets)
                 
 
                 loss_train.backward()
                 optimizer.step()
 
                 print(f'Epoch {epoch} Batch {batch_idx} Loss: {loss_train}')
+            psnr_train = self.PSNR_train.compute()
+            ssim_train = self.SSIM_train.compute()
 
+            self.PSNR_train.reset()
+            self.SSIM_train.reset()
                 # use this block to calculate all test set metrics to avoid affecting model
             if gen_images:
                 with torch.no_grad():
@@ -312,9 +317,12 @@ class AutoEncoder(nn.Module):
                 output_valid = self.forward(test_X, test_condition)
                 loss_valid = self.loss(test_Y, output_valid)
                 print(f'Validation Loss: {loss_valid}')
-
-                psnr_valid = self.PSNR(output_valid, test_Y)
-                ssim_valid = self.PSNR(output_valid, test_Y)
+                self.PSNR_test.updata(output_valid, test_Y)
+                self.SSIM_test.update(output_valid, test_Y)
+                psnr_valid = self.PSNR_test.compute()
+                ssim_valid = self.SSIM_test.compute()
+                self.PSNR_test.reset()
+                self.SSIM_test.reset()
             self.save_model(save_path)
        
             wandb.log({
