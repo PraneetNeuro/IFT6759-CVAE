@@ -248,7 +248,7 @@ class AutoEncoder(nn.Module):
         loss = F.mse_loss(ground_truth, output)
         return loss
 
-    def train(self, epochs, batch_size, save_path, gen_images = None, gen_condition = None):
+    def train(self, epochs, batch_size, save_path, gen_images=None, gen_condition=None):
 
         # # dummy pass to initialize watch:
         # with torch.no_grad():
