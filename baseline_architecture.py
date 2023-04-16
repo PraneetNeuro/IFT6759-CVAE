@@ -85,7 +85,7 @@ class AutoEncoder(nn.Module):
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
         else:
-            self.device = torch.device('cpu')
+            self.device = torch.device('mps')
 
         self.model_save_path = config['model_save_path']
 
@@ -285,8 +285,11 @@ class AutoEncoder(nn.Module):
         # get holdout sketches
         simple_sketch_path = self.image_gen_config['simple_sketch_path']
         simple_sketches, simple_sketch_files = self.getSketches(simple_sketch_path)
+        simple_sketches = simple_sketches.to(self.device)
+
         detail_sketch_path = self.image_gen_config['detail_sketch_path']
         detail_sketches, detail_sketch_files = self.getSketches(detail_sketch_path)
+        detail_sketches = detail_sketches.to(self.device)
 
 
         # get "bad" sketches
@@ -297,6 +300,7 @@ class AutoEncoder(nn.Module):
         # get CUHK sketches
         cuhk_sketch_path = self.image_gen_config['cuhk_sketch_path']
         cuhk_sketches, cuhk_sketch_files = self.getSketches(cuhk_sketch_path)
+        cuhk_sketches = cuhk_sketches.to(self.device)
 
             
 
@@ -464,7 +468,7 @@ class AutoEncoder(nn.Module):
 
         # Load dataset artifact and dataset information
         dataset_artifact = wandb.Artifact(dataset_name, "dataset")
-        dataset_artifact.add_dir("model_input/sketches/")
+        dataset_artifact.add_dir("model_input/mixed_/")
         # wandb.use_artifact(dataset_artifact)
 
         with wandb.init(config=sweep_config):
