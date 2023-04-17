@@ -219,7 +219,7 @@ class AutoEncoder(nn.Module):
         incept.update(holdout_outputs)
         psnr.update(holdout_outputs, holdout_target)
 
-        ssim_score, fid_score, incept_score, psnr_score = ssim.compute(), fid.compute(), incept.compute(), psnr.compute()
+        ssim_score, fid_score, incept_score, psnr_score = ssim.compute(), fid.compute().float(), incept.compute(), psnr.compute()
         return ssim_score, fid_score, incept_score, psnr_score
     
     def getSketches(self, sketch_path):
@@ -526,7 +526,7 @@ class AutoEncoder(nn.Module):
                 psnr_train = self.PSNR.compute()
                 ssim_train = self.SSIM.compute()
                 is_train = self.IS.compute()
-                fid_train = self.FID.compute()
+                fid_train = self.FID.compute().float()
 
                 self.PSNR.reset()
                 self.SSIM.reset()
