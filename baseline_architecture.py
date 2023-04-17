@@ -4,7 +4,8 @@ import torch.nn.functional as F
 from torchmetrics.functional import peak_signal_noise_ratio, structural_similarity_index_measure
 from torchmetrics.image.inception import InceptionScore
 from torchmetrics.image.fid import FrechetInceptionDistance
-from ignite.metrics import FID, InceptionScore
+from torchmetrics import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
+# from ignite.metrics import FID, InceptionScore
 
 import torchvision
 import torchvision.models as models
@@ -39,7 +40,6 @@ class PerceptualLoss(nn.Module):
         return loss
 
 
-
 class UNetBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
         super(UNetBlock, self).__init__()
@@ -55,6 +55,7 @@ class UNetBlock(nn.Module):
     def forward(self, x):
         return self.block(x)
 
+
 class UNetUpBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=2, stride=2):
         super(UNetUpBlock, self).__init__()
@@ -66,7 +67,6 @@ class UNetUpBlock(nn.Module):
         
     def forward(self, x):
         return self.block(x)
-
 
 
 class AutoEncoder(nn.Module):
@@ -134,6 +134,11 @@ class AutoEncoder(nn.Module):
         # Pooling layer for downsampling
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
+        self.PSNR = PeakSignalNoiseRatio(device=self.device)
+        self.SSIM = StructuralSimilarityIndexMeasure(device=self.device)
+        self.FID = FrechetInceptionDistance(normalize=True, device=self.device)
+        self.IS = InceptionScore(normalize=True, device=self.device)
+
         self.to(self.device)
 
     
@@ -174,6 +179,7 @@ class AutoEncoder(nn.Module):
 
         # Output
         output = self.output_conv(dec1_out)
+        output = torch.sigmoid(output)
         return output
 
     
@@ -194,65 +200,37 @@ class AutoEncoder(nn.Module):
             loss = F.mse_loss(ground_truth, output)
         return loss
 
-    def PSNR(self, output, ground_truth):
+    def calculate_metrics(self, holdout_outputs, holdout_target):
         """
-        Computes the Peak Signal-to-Noise Ratio (PSNR) between the ground truth images and the predicted output images.
-
-        Args:
-        - output (torch.Tensor): a tensor representing the predicted output images
-        - ground_truth (torch.Tensor): a tensor representing the ground truth images
-
-        Returns:
-        - psnr (torch.Tensor): the PSNR between the ground truth and predicted output images
+        Compute four metrics for validation data like hold-outs and test set. DO NOT use for training data
+        or data divided in batches.
+        :param holdout_outputs: generated images
+        :param holdout_target: originals
+        :return: ssim_score, fid_score, incept_score and psnr_score
         """
-        psnr = peak_signal_noise_ratio(output, ground_truth)
-        return psnr
-    
-    def SSIM(self, output, ground_truth):
-        """
-        Computes the Structural Similarity Index Measure (SSIM) between the ground truth images and the predicted output images.
+        # Initialise
+        ssim = StructuralSimilarityIndexMeasure(device=self.device)
+        fid = FrechetInceptionDistance(normalize=True, device=self.device)
+        incept = InceptionScore(normalize=True, device=self.device)
+        psnr = PeakSignalNoiseRatio(device=self.device)
 
-        Args:
-        - output (torch.Tensor): a tensor representing the predicted output images
-        - ground_truth (torch.Tensor): a tensor representing the ground truth images
+        ssim.update(holdout_outputs, holdout_target)
+        fid.update(holdout_outputs, real=False)
+        fid.update(holdout_target, real=True)
+        incept.update(holdout_outputs)
+        psnr.update(holdout_outputs, holdout_target)
 
-        Returns:
-        - ssim (torch.Tensor): the SSIM between the ground truth and predicted output images
-        """
-        ssim = structural_similarity_index_measure(output, ground_truth)
-        return ssim
-    
-    def InceptionScore(self, output):
-        """
-        Computes the Inception Score (IS) of the predicted output images.
+        ssim_score = ssim.compute()
 
-        Args:
-        - output (torch.Tensor): a tensor representing the predicted output images
+        try:
+            fid_score = fid.compute().float()
+        except:
+            fid_score = None
 
-        Returns:
-        - inception_score (torch.Tensor): the Inception Score of the predicted output images
-        """
-        inception = InceptionScore()
-        inception.update(output)
-        inception_score =  inception.compute()
+        incept_score, _ = incept.compute()
+        psnr_score = psnr.compute()
 
-        return inception_score
-    def FIDScore(self, output, ground_truth):
-        """
-        Computes the Fréchet Inception Distance (FID) of the predicted output images.
-
-        Args:
-        - output (torch.Tensor): a tensor representing the predicted output images
-
-        Returns:
-        - fid_score (torch.Tensor): the Fréchet Inception Distance of the predicted output images
-        """
-        fid = FrechetInceptionDistance(normalize=True)
-        fid.update(ground_truth, real=True)
-        fid.update(output, real=False)
-
-        fid_score = fid.compute()
-        return fid_score
+        return ssim_score, fid_score, incept_score, psnr_score
     
     def getSketches(self, sketch_path):
         """
@@ -281,10 +259,6 @@ class AutoEncoder(nn.Module):
         prepped_sketches = torch.from_numpy(prepped_sketches).float().view(-1, 1, self.input_size, self.input_size)
 
         return prepped_sketches, sketch_files
-
-  
-
-
     
     def genImages(self, epoch):
 
@@ -321,8 +295,11 @@ class AutoEncoder(nn.Module):
         # get holdout sketches
         simple_sketch_path = self.image_gen_config['simple_sketch_path']
         simple_sketches, simple_sketch_files = self.getSketches(simple_sketch_path)
+        simple_sketches = simple_sketches.to(self.device)
+
         detail_sketch_path = self.image_gen_config['detail_sketch_path']
         detail_sketches, detail_sketch_files = self.getSketches(detail_sketch_path)
+        detail_sketches = detail_sketches.to(self.device)
 
 
         # get "bad" sketches
@@ -333,6 +310,7 @@ class AutoEncoder(nn.Module):
         # get CUHK sketches
         cuhk_sketch_path = self.image_gen_config['cuhk_sketch_path']
         cuhk_sketches, cuhk_sketch_files = self.getSketches(cuhk_sketch_path)
+        cuhk_sketches = cuhk_sketches.to(self.device)
 
             
 
@@ -358,12 +336,8 @@ class AutoEncoder(nn.Module):
         
         # create image tables
 
-        columns = ['id', 'sketch', 'photo', 'generation', 'ssim', 'inception_score', 'fid']
+        columns = ['id', 'sketch', 'photo', 'generation', 'ssim', 'inception_score', 'psnr']
 
-        
-        # inception = None
-        # fid = None
-        
         # bad sketch table
         bad_sketch_table = wandb.Table(columns=columns)
         for name, sketch, photo, generation in zip(bad_sketch_files, bad_sketches, bad_photos, bad_sketch_output):
@@ -374,13 +348,8 @@ class AutoEncoder(nn.Module):
             metric_photo = torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(metric_photo)
             metric_photo = metric_photo.unsqueeze(0)
             metric_gen = torch.tensor(generation).unsqueeze(0)
-            
-            ssim_score = self.SSIM(metric_gen, metric_photo)
-            inception_score = self.InceptionScore(metric_gen)
-            # fid_score = self.FIDScore(metric_gen, metric_photo)
-            fid_score = None
-            
 
+            ssim_score, fid_score, inception_score, psnr_score = self.calculate_metrics(metric_gen, metric_photo)
 
             sketch = wandb.Image(sketch)
 
@@ -388,16 +357,11 @@ class AutoEncoder(nn.Module):
             photo = wandb.Image(photo)
             # [wandb.Image(cv2.cvtColor(np.transpose(img, (1, 2, 0)), cv2.COLOR_BGR2RGB)) for img in output_images]})
 
-            
-
             generation = np.transpose(generation, (1, 2, 0))
             generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
             generation = wandb.Image(generation)
 
-
-            
-
-            bad_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
+            bad_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, psnr_score)
         wandb.log({f"bad_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": bad_sketch_table})
 
         # CUHK sketch table
@@ -410,11 +374,8 @@ class AutoEncoder(nn.Module):
             metric_photo = torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(metric_photo)
             metric_photo = metric_photo.unsqueeze(0)
             metric_gen = torch.tensor(generation).unsqueeze(0)
-            
-            ssim_score = self.SSIM(metric_gen, metric_photo)
-            inception_score = self.InceptionScore(metric_gen)
-            # fid_score = self.FIDScore(metric_gen, metric_photo)
-            fid_score = None
+
+            ssim_score, fid_score, inception_score, psnr_score = self.calculate_metrics(metric_gen, metric_photo)
 
             sketch = wandb.Image(sketch)
 
@@ -426,8 +387,7 @@ class AutoEncoder(nn.Module):
             generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
             generation = wandb.Image(generation)
 
-
-            cuhk_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
+            cuhk_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, psnr_score)
         wandb.log({f"cuhk_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": cuhk_sketch_table})
 
         # simple sketch table
@@ -440,12 +400,8 @@ class AutoEncoder(nn.Module):
             metric_photo = torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(metric_photo)
             metric_photo = metric_photo.unsqueeze(0)
             metric_gen = torch.tensor(generation).unsqueeze(0)
-            
-            ssim_score = self.SSIM(metric_gen, metric_photo)
-            inception_score = self.InceptionScore(metric_gen)
-            # fid_score = self.FIDScore(metric_gen, metric_photo)
-            fid_score = None
 
+            ssim_score, fid_score, inception_score, psnr_score = self.calculate_metrics(metric_gen, metric_photo)
 
             sketch = wandb.Image(sketch)
 
@@ -458,7 +414,7 @@ class AutoEncoder(nn.Module):
             generation = wandb.Image(generation)
 
 
-            simple_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
+            simple_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, psnr_score)
         wandb.log({f"simple_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": simple_sketch_table})
 
         # simple sketch table
@@ -471,12 +427,8 @@ class AutoEncoder(nn.Module):
             metric_photo = torchvision.transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])(metric_photo)
             metric_photo = metric_photo.unsqueeze(0)
             metric_gen = torch.tensor(generation).unsqueeze(0)
-            
-            ssim_score = self.SSIM(metric_gen, metric_photo)
-            inception_score = self.InceptionScore(metric_gen)
-            # fid_score = self.FIDScore(metric_gen, metric_photo)
-            fid_score = None
 
+            ssim_score, fid_score, inception_score, psnr_score = self.calculate_metrics(metric_gen, metric_photo)
 
             sketch = wandb.Image(sketch)
 
@@ -489,16 +441,8 @@ class AutoEncoder(nn.Module):
             generation = wandb.Image(generation)
 
 
-            detail_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
+            detail_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, psnr_score)
         wandb.log({f"detail_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": detail_sketch_table})
-
-
-
-
-
-
-            
-        
     def get_optimizer(self, optimizer, learning_rate):
 
         if optimizer == "sgd":
@@ -533,8 +477,8 @@ class AutoEncoder(nn.Module):
         model_artifact = wandb.Artifact(model_name, type="model")
 
         # Load dataset artifact and dataset information
-        dataset_artifact = wandb.Artifact(dataset_name, "dataset")
-        dataset_artifact.add_dir("model_input/sketches/")
+        # dataset_artifact = wandb.Artifact(dataset_name, "dataset")
+        # dataset_artifact.add_dir("model_input/mixed_/")
         # wandb.use_artifact(dataset_artifact)
 
         with wandb.init(config=sweep_config):
@@ -560,8 +504,6 @@ class AutoEncoder(nn.Module):
             # Loop through each epoch
             for epoch in range(config.epochs):
                 epoch_loss = 0
-                psnr_train = 0
-                ssim_train = 0
 
                 # Loop through each batch in the training data
                 for batch_idx, (images, conditions, targets) in enumerate(self.dataloader):
@@ -576,8 +518,11 @@ class AutoEncoder(nn.Module):
                     epoch_loss += loss_train.item()
 
                     # Compute evaluation metrics (PSNR and SSIM)
-                    psnr_train =+ self.PSNR(output_train, targets)
-                    ssim_train =+ self.SSIM(output_train, targets)
+                    self.PSNR.update(output_train, targets)
+                    self.SSIM.update(output_train, targets)
+                    self.IS.update(output_train)
+                    self.FID.update(output_train, real=False)
+                    self.FID.update(targets, real=True)
 
                     # Compute gradients and update weights
                     loss_train.backward()
@@ -588,8 +533,15 @@ class AutoEncoder(nn.Module):
 
                 # Compute average loss for the epoch
                 epoch_loss = epoch_loss / len(self.dataloader)
-                psnr_train = psnr_train / len(self.dataloader)
-                ssim_train = ssim_train / len(self.dataloader)
+                psnr_train = self.PSNR.compute()
+                ssim_train = self.SSIM.compute()
+                is_train, _ = self.IS.compute()
+                fid_train = self.FID.compute().float()
+
+                self.PSNR.reset()
+                self.SSIM.reset()
+                self.IS.reset()
+                self.FID.reset()
 
                 print(f'Epoch {epoch+1} Training Loss:   {epoch_loss}')
 
@@ -600,14 +552,11 @@ class AutoEncoder(nn.Module):
                     loss_valid = self.loss(test_Y, output_valid)
                     print(f'Epoch {epoch+1} Validation Loss: {loss_valid}\n')
 
-                    psnr_valid = self.PSNR(output_valid, test_Y)
-                    ssim_valid = self.SSIM(output_valid, test_Y)
+                    ssim_valid, fid_valid, is_valid, psnr_valid = self.calculate_metrics(output_valid, test_Y)
 
                 # Generate images if specified in configuration
                 if self.image_gen_config['gen_img'] is not None:
                     self.genImages(epoch)
-
-                
 
                 # Log metrics to Weights and Biases
                 wandb.log({
@@ -618,21 +567,23 @@ class AutoEncoder(nn.Module):
                     "train-PSNR": psnr_train,
                     'valid-PSNR': psnr_valid,
                     'train-SSIM': ssim_train,
-                    'valid-SSIM': ssim_valid
+                    'valid-SSIM': ssim_valid,
+                    'train-FID': fid_train,
+                    'valid-FID': fid_valid,
+                    'train-IS': is_train,
+                    'valid-IS': is_valid
                     },)
 
             # Save the model
             self.save_model(self.model_save_path)
             wandb.log_artifact(model_artifact)
 
-        
-
-
     def save_model(self, path):
         torch.save(self.state_dict(), path)
     
     def load_model(self, path):
         self.load_state_dict(torch.load(path))
+
 
 if __name__ == '__main__':
     # read config

@@ -17,13 +17,13 @@ data_config:
         - 128
     projection_size: 256
     condition_size: 15
-    num_img: 1000
-    validation_sample_size: 100
+    num_img: 100
+    validation_sample_size: 10
     train_split: 0.9
 wandb_config:
     desc: Pertaining to the experiment tracking
     project_name: sketch-VAE
-    model_name: hp_testing
+    model_name: metrics_testing
     dataset_name: baseline_test_versioning
     artifact_name: test-model
     artifact_type: model
