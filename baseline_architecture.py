@@ -136,8 +136,8 @@ class AutoEncoder(nn.Module):
 
         self.PSNR = PeakSignalNoiseRatio()
         self.SSIM = StructuralSimilarityIndexMeasure()
-        self.FID = FrechetInceptionDistance()
-        self.IS = InceptionScore()
+        self.FID = FrechetInceptionDistance(normalize=True)
+        self.IS = InceptionScore(normalize=True)
 
         self.to(self.device)
 
@@ -209,8 +209,8 @@ class AutoEncoder(nn.Module):
         """
         # Initialise
         ssim = StructuralSimilarityIndexMeasure()
-        fid = FrechetInceptionDistance()
-        incept = InceptionScore()
+        fid = FrechetInceptionDistance(normalize=True)
+        incept = InceptionScore(normalize=True)
         psnr = PeakSignalNoiseRatio()
 
         ssim.update(holdout_outputs, holdout_target)
