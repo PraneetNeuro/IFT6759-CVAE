@@ -5,7 +5,7 @@ from torchmetrics.functional import peak_signal_noise_ratio, structural_similari
 from torchmetrics.image.inception import InceptionScore
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
-from ignite.metrics import FID, InceptionScore
+# from ignite.metrics import FID, InceptionScore
 
 import torchvision
 import torchvision.models as models
@@ -85,7 +85,7 @@ class AutoEncoder(nn.Module):
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
         else:
-            self.device = torch.device('mps')
+            self.device = torch.device('cpu')
 
         self.model_save_path = config['model_save_path']
 
@@ -137,7 +137,7 @@ class AutoEncoder(nn.Module):
         self.PSNR = PeakSignalNoiseRatio(device=self.device)
         self.SSIM = StructuralSimilarityIndexMeasure(device=self.device)
         self.FID = FrechetInceptionDistance(normalize=True, device=self.device)
-        self.IS = InceptionScore(device=self.device)
+        self.IS = InceptionScore(normalize=True, device=self.device)
 
         self.to(self.device)
 
@@ -211,7 +211,7 @@ class AutoEncoder(nn.Module):
         # Initialise
         ssim = StructuralSimilarityIndexMeasure(device=self.device)
         fid = FrechetInceptionDistance(normalize=True, device=self.device)
-        incept = InceptionScore(device=self.device)
+        incept = InceptionScore(normalize=True, device=self.device)
         psnr = PeakSignalNoiseRatio(device=self.device)
 
         ssim.update(holdout_outputs, holdout_target)
@@ -220,7 +220,16 @@ class AutoEncoder(nn.Module):
         incept.update(holdout_outputs)
         psnr.update(holdout_outputs, holdout_target)
 
-        ssim_score, fid_score, incept_score, psnr_score = ssim.compute(), fid.compute().float(), incept.compute(), psnr.compute()
+        ssim_score = ssim.compute()
+
+        try:
+            fid_score = fid.compute().float()
+        except:
+            fid_score = None
+
+        incept_score, _ = incept.compute()
+        psnr_score = psnr.compute()
+
         return ssim_score, fid_score, incept_score, psnr_score
     
     def getSketches(self, sketch_path):
@@ -327,7 +336,7 @@ class AutoEncoder(nn.Module):
         
         # create image tables
 
-        columns = ['id', 'sketch', 'photo', 'generation', 'ssim', 'inception_score', 'fid']
+        columns = ['id', 'sketch', 'photo', 'generation', 'ssim', 'inception_score', 'psnr']
 
         # bad sketch table
         bad_sketch_table = wandb.Table(columns=columns)
@@ -352,7 +361,7 @@ class AutoEncoder(nn.Module):
             generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
             generation = wandb.Image(generation)
 
-            bad_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
+            bad_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, psnr_score)
         wandb.log({f"bad_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": bad_sketch_table})
 
         # CUHK sketch table
@@ -378,7 +387,7 @@ class AutoEncoder(nn.Module):
             generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
             generation = wandb.Image(generation)
 
-            cuhk_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
+            cuhk_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, psnr_score)
         wandb.log({f"cuhk_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": cuhk_sketch_table})
 
         # simple sketch table
@@ -405,7 +414,7 @@ class AutoEncoder(nn.Module):
             generation = wandb.Image(generation)
 
 
-            simple_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
+            simple_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, psnr_score)
         wandb.log({f"simple_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": simple_sketch_table})
 
         # simple sketch table
@@ -432,7 +441,7 @@ class AutoEncoder(nn.Module):
             generation = wandb.Image(generation)
 
 
-            detail_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, fid_score)
+            detail_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, psnr_score)
         wandb.log({f"detail_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": detail_sketch_table})
     def get_optimizer(self, optimizer, learning_rate):
 
@@ -468,8 +477,8 @@ class AutoEncoder(nn.Module):
         model_artifact = wandb.Artifact(model_name, type="model")
 
         # Load dataset artifact and dataset information
-        dataset_artifact = wandb.Artifact(dataset_name, "dataset")
-        dataset_artifact.add_dir("model_input/mixed_/")
+        # dataset_artifact = wandb.Artifact(dataset_name, "dataset")
+        # dataset_artifact.add_dir("model_input/mixed_/")
         # wandb.use_artifact(dataset_artifact)
 
         with wandb.init(config=sweep_config):
@@ -526,7 +535,7 @@ class AutoEncoder(nn.Module):
                 epoch_loss = epoch_loss / len(self.dataloader)
                 psnr_train = self.PSNR.compute()
                 ssim_train = self.SSIM.compute()
-                is_train = self.IS.compute()
+                is_train, _ = self.IS.compute()
                 fid_train = self.FID.compute().float()
 
                 self.PSNR.reset()
