@@ -179,6 +179,7 @@ class AutoEncoder(nn.Module):
 
         # Output
         output = self.output_conv(dec1_out)
+        output = torch.sigmoid(output)
         return output
 
     
