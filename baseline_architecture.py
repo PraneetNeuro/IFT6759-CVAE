@@ -134,10 +134,10 @@ class AutoEncoder(nn.Module):
         # Pooling layer for downsampling
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.PSNR = PeakSignalNoiseRatio()
-        self.SSIM = StructuralSimilarityIndexMeasure()
-        self.FID = FrechetInceptionDistance(normalize=True)
-        self.IS = InceptionScore()
+        self.PSNR = PeakSignalNoiseRatio(device=self.device)
+        self.SSIM = StructuralSimilarityIndexMeasure(device=self.device)
+        self.FID = FrechetInceptionDistance(normalize=True, device=self.device)
+        self.IS = InceptionScore(device=self.device)
 
         self.to(self.device)
 
@@ -209,10 +209,10 @@ class AutoEncoder(nn.Module):
         :return: ssim_score, fid_score, incept_score and psnr_score
         """
         # Initialise
-        ssim = StructuralSimilarityIndexMeasure()
-        fid = FrechetInceptionDistance(normalize=True)
-        incept = InceptionScore()
-        psnr = PeakSignalNoiseRatio()
+        ssim = StructuralSimilarityIndexMeasure(device=self.device)
+        fid = FrechetInceptionDistance(normalize=True, device=self.device)
+        incept = InceptionScore(device=self.device)
+        psnr = PeakSignalNoiseRatio(device=self.device)
 
         ssim.update(holdout_outputs, holdout_target)
         fid.update(holdout_outputs, real=False)
