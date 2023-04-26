@@ -444,7 +444,7 @@ class AutoEncoder(nn.Module):
             detail_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, psnr_score)
         wandb.log({f"detail_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": detail_sketch_table})
     def get_optimizer(self, optimizer, learning_rate):
-
+        print(optimizer)
         if optimizer == "sgd":
             optimizer = torch.optim.SGD(self.parameters(),
                               lr=learning_rate, momentum=0.9)

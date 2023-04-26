@@ -22,7 +22,7 @@ class CelebADataset(torch.utils.data.Dataset):
         self.condition_size = self.data_config['condition_size']
         self.original_path = self.data_source_config['input_original_path']
         self.sketch_path = self.data_source_config['input_sketch_path']
-        self.condition_path = self.data_source_config['condition_path']
+        # self.condition_path = self.data_source_config['condition_path']
         self.input_size = self.data_config['input_size'][0]
         self.output_size = self.data_config['output_size'][0]
 
@@ -36,20 +36,20 @@ class CelebADataset(torch.utils.data.Dataset):
         self.test_Y = self.Y[train_len:len(self.Y)]
 
         # Load the conditions data
-        if self.condition_path is not None:
-            self.condition_data = np.load(self.condition_path)
-        else:
-            self.condition_data = np.ones((len(self.X), 1))
+        # if self.condition_path is not None:
+        #     self.condition_data = np.load(self.condition_path)
+        # else:
+        #     self.condition_data = np.ones((len(self.X), 1))
 
         # process and split conditioning data
-        self.condition_data = torch.from_numpy(self.condition_data).float().view(-1, self.condition_size)[:self.num_img]
-        self.train_condition_data = self.condition_data[0:train_len]
-        self.test_condition_data = self.condition_data[train_len:len(self.condition_data)]
+        # self.condition_data = torch.from_numpy(self.condition_data).float().view(-1, self.condition_size)[:self.num_img]
+        # self.train_condition_data = self.condition_data[0:train_len]
+        # self.test_condition_data = self.condition_data[train_len:len(self.condition_data)]
 
         # Check if the number of samples in sketches, original images and condition data is equal
-        assert len(self.X) == len(self.Y) == self.condition_data.shape[0], 'Number of samples in X, Y and condition data must be equal'
+        assert len(self.X) == len(self.Y), 'Number of samples in X, and Y must be equal'
 
-        self.num_samples = self.train_condition_data.shape[0]
+        self.num_samples = train_len
 
         # Define the image preprocessing functions
         self.transforms = {
@@ -103,7 +103,8 @@ class CelebADataset(torch.utils.data.Dataset):
         sketch = self.transforms['resize_sketch'](sketch)
 
         # Get the condition data for this sample
-        condition_data = self.train_condition_data[idx]
+        # condition_data = self.train_condition_data[idx]
+        condition_data = torch.ones((1, 1))
 
         return sketch, original, condition_data
     
@@ -132,7 +133,8 @@ class CelebADataset(torch.utils.data.Dataset):
         # Get the filenames corresponding to the selected indices
         sample_X = np.array(self.test_X)[sample_indices]
         sample_Y = np.array(self.test_Y)[sample_indices]
-        sample_condition_vec = np.array(self.test_condition_data)[sample_indices]
+        # sample_condition_vec = np.array(self.test_condition_data)[sample_indices]
+        sample_condition_vec = np.ones((sample_size, 1))
 
         for sketch_file, original_file in zip(sample_X, sample_Y):
 
