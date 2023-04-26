@@ -15,8 +15,8 @@ The project has been built with wandb integration for tracking experiments. So, 
 
 ### To train a model with your own dataset
 
-The dataset must be in the form of two directories containing source and corresponding target images in their respective folders (It could be any dataset, not the sketch-photorealistic dataset necessarily). The directories can be placed in the 'model_input' directory of the repository, and edit the config.yaml file accordingly to reflect the path of the dataset properly. <br>
-The training script by default is set to run a wandb sweep that can run the training loop with various sets of hyperparameters that are defined in the config file. You can add / remove the hyperparameters listed as desired.<br>
+The dataset must be in the form of two directories containing source and corresponding target images in their respective folders (It could be any dataset, not the sketch-photorealistic dataset necessarily). The directories can be placed in the 'model_input' directory of the repository. Edit the paths in config.yaml file accordingly to reflect the path of the dataset. <br>
+The training script by default is set to run a wandb Sweep from ```__main__```. The Sweep runs the training loop, testing various combinations of hyperparameters that are defined in the config file. You can add / remove the hyperparameters listed as desired.<br>
 The trained models will be saved in the model_files directory of the repo.
 
 The training script can then be executed with the following command:
