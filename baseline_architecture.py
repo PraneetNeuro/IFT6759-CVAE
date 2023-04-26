@@ -142,13 +142,12 @@ class AutoEncoder(nn.Module):
         self.to(self.device)
 
     
-    def forward(self, input, condition):
+    def forward(self, input):
         """
         Forward pass of the AutoEncoder.
 
         Args:
             input: Input tensor of size (batch_size, 1, input_size, input_size)
-            condition: Conditional tensor of size (batch_size, condition_size)
 
         Returns:
             out: Output tensor of size (batch_size, 3, output_size, output_size)
@@ -179,7 +178,6 @@ class AutoEncoder(nn.Module):
 
         # Output
         output = self.output_conv(dec1_out)
-        output = torch.sigmoid(output)
         return output
 
     
@@ -288,8 +286,6 @@ class AutoEncoder(nn.Module):
         holdout_photo_files = sorted(os.listdir(holdout_photo_path))
         orig_photos = [cv2.imread(os.path.join(holdout_photo_path, img_file)) for img_file in holdout_photo_files]
 
-
-
         # read sketches
 
         # get holdout sketches
@@ -312,27 +308,12 @@ class AutoEncoder(nn.Module):
         cuhk_sketches, cuhk_sketch_files = self.getSketches(cuhk_sketch_path)
         cuhk_sketches = cuhk_sketches.to(self.device)
 
-            
-
-        # get the condition vectors to generate images
-        condition_size = self.data_config['condition_size']
-        if self.image_gen_config['gen_with_condition']:
-            conditions = self.dataset.condition_data
-            conditions = torch.from_numpy(conditions).float().view(-1, condition_size).to(self.device)
-        else:
-            bad_sketch_conditions    = torch.zeros(bad_sketches.shape[0], condition_size).float().to(self.device)
-            simple_sketch_conditions = torch.zeros(simple_sketches.shape[0], condition_size).float().to(self.device)
-            detail_sketch_conditions = torch.zeros(detail_sketches.shape[0], condition_size).float().to(self.device)
-            cuhk_sketch_conditions   = torch.zeros(cuhk_sketches.shape[0], condition_size).float().to(self.device)
-
         # generate the output images using the trained model and move them to the CPU
         with torch.no_grad():
-            bad_sketch_output = self.forward(bad_sketches, bad_sketch_conditions).cpu().numpy()
-            # bad_sketch_output = bad_sketch_output.cpu().numpy()
-
-            simple_sketch_output = self.forward(simple_sketches, simple_sketch_conditions).cpu().numpy()
-            detail_sketch_output = self.forward(detail_sketches, detail_sketch_conditions).cpu().numpy()
-            cuhk_sketch_output = self.forward(cuhk_sketches, cuhk_sketch_conditions).cpu().numpy()
+            bad_sketch_output = self.forward(bad_sketches).cpu().numpy()
+            simple_sketch_output = self.forward(simple_sketches).cpu().numpy()
+            detail_sketch_output = self.forward(detail_sketches).cpu().numpy()
+            cuhk_sketch_output = self.forward(cuhk_sketches).cpu().numpy()
         
         # create image tables
 
@@ -381,7 +362,6 @@ class AutoEncoder(nn.Module):
 
             photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
             photo = wandb.Image(photo)
-            # [wandb.Image(cv2.cvtColor(np.transpose(img, (1, 2, 0)), cv2.COLOR_BGR2RGB)) for img in output_images]})
 
             generation = np.transpose(generation, (1, 2, 0))
             generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
@@ -407,7 +387,6 @@ class AutoEncoder(nn.Module):
 
             photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
             photo = wandb.Image(photo)
-            # [wandb.Image(cv2.cvtColor(np.transpose(img, (1, 2, 0)), cv2.COLOR_BGR2RGB)) for img in output_images]})
 
             generation = np.transpose(generation, (1, 2, 0))
             generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
@@ -434,7 +413,6 @@ class AutoEncoder(nn.Module):
 
             photo = cv2.cvtColor(photo, cv2.COLOR_BGR2RGB)
             photo = wandb.Image(photo)
-            # [wandb.Image(cv2.cvtColor(np.transpose(img, (1, 2, 0)), cv2.COLOR_BGR2RGB)) for img in output_images]})
 
             generation = np.transpose(generation, (1, 2, 0))
             generation = cv2.cvtColor(generation, cv2.COLOR_BGR2RGB)
@@ -443,8 +421,11 @@ class AutoEncoder(nn.Module):
 
             detail_sketch_table.add_data(name, sketch, photo, generation, ssim_score, inception_score, psnr_score)
         wandb.log({f"detail_sketches_epoch_{epoch+1}_{str(wandb.run.id)}": detail_sketch_table})
+
     def get_optimizer(self, optimizer, learning_rate):
-        print(optimizer)
+        """
+        Returns the optimizer specified by the config.
+        """
         if optimizer == "sgd":
             optimizer = torch.optim.SGD(self.parameters(),
                               lr=learning_rate, momentum=0.9)
@@ -476,11 +457,6 @@ class AutoEncoder(nn.Module):
         # Initialize Weights and Biases artifact for model
         model_artifact = wandb.Artifact(model_name, type="model")
 
-        # Load dataset artifact and dataset information
-        # dataset_artifact = wandb.Artifact(dataset_name, "dataset")
-        # dataset_artifact.add_dir("model_input/mixed_/")
-        # wandb.use_artifact(dataset_artifact)
-
         with wandb.init(config=sweep_config):
 
             config = wandb.config
@@ -494,24 +470,23 @@ class AutoEncoder(nn.Module):
                                          shuffle=True)
 
             # Get a validation sample from the dataset for evaluation
-            test_X, test_Y, test_condition = self.dataset.get_validation_sample(self.data_config['validation_sample_size'])
+            test_X, test_Y = self.dataset.get_validation_sample(self.data_config['validation_sample_size'])
 
             # Convert validation data to device (CPU or GPU)
             test_X = test_X.to(self.device)
             test_Y = test_Y.to(self.device)
-            test_condition = test_condition.to(self.device)
 
             # Loop through each epoch
             for epoch in range(config.epochs):
                 epoch_loss = 0
 
                 # Loop through each batch in the training data
-                for batch_idx, (images, conditions, targets) in enumerate(self.dataloader):
-                    images, targets, conditions = images.to(self.device), conditions.to(self.device), targets.to(self.device)
+                for batch_idx, (images, targets) in enumerate(self.dataloader):
+                    images, targets = images.to(self.device), targets.to(self.device)
                     optimizer.zero_grad()
 
                     # Generate output from the autoencoder
-                    output_train = self.forward(images, conditions)
+                    output_train = self.forward(images)
 
                     # Compute the loss
                     loss_train = self.loss(targets, output_train)
@@ -548,7 +523,7 @@ class AutoEncoder(nn.Module):
                 # calculate validation loss and metrics
                 
                 with torch.no_grad():
-                    output_valid = self.forward(test_X, test_condition)
+                    output_valid = self.forward(test_X)
                     loss_valid = self.loss(test_Y, output_valid)
                     print(f'Epoch {epoch+1} Validation Loss: {loss_valid}\n')
 

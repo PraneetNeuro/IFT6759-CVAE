@@ -18,7 +18,7 @@ data_config:
     projection_size: 256
     condition_size: 15
     num_img: 100
-    validation_sample_size: 10
+    validation_sample_size: 1
     train_split: 0.9
 wandb_config:
     desc: Pertaining to the experiment tracking
@@ -47,7 +47,7 @@ sweep_config:
             values:
                 - rmsprop
         epochs: 
-            value: 10
+            value: 2
         learning_rate:
             distribution: uniform
             min: 0.0

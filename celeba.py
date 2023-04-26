@@ -35,17 +35,6 @@ class CelebADataset(torch.utils.data.Dataset):
         self.train_Y = self.Y[0:train_len]
         self.test_Y = self.Y[train_len:len(self.Y)]
 
-        # Load the conditions data
-        # if self.condition_path is not None:
-        #     self.condition_data = np.load(self.condition_path)
-        # else:
-        #     self.condition_data = np.ones((len(self.X), 1))
-
-        # process and split conditioning data
-        # self.condition_data = torch.from_numpy(self.condition_data).float().view(-1, self.condition_size)[:self.num_img]
-        # self.train_condition_data = self.condition_data[0:train_len]
-        # self.test_condition_data = self.condition_data[train_len:len(self.condition_data)]
-
         # Check if the number of samples in sketches, original images and condition data is equal
         assert len(self.X) == len(self.Y), 'Number of samples in X, and Y must be equal'
 
@@ -102,11 +91,11 @@ class CelebADataset(torch.utils.data.Dataset):
         original = self.transforms['resize_original'](original)
         sketch = self.transforms['resize_sketch'](sketch)
 
-        # Get the condition data for this sample
-        # condition_data = self.train_condition_data[idx]
-        condition_data = torch.ones((1, 1))
+        # Normalize the images
+        original = self.transforms['normalize_original'](original)
+        sketch = self.transforms['normalize_sketch'](sketch)
 
-        return sketch, original, condition_data
+        return sketch, original
     
 
 
@@ -133,8 +122,6 @@ class CelebADataset(torch.utils.data.Dataset):
         # Get the filenames corresponding to the selected indices
         sample_X = np.array(self.test_X)[sample_indices]
         sample_Y = np.array(self.test_Y)[sample_indices]
-        # sample_condition_vec = np.array(self.test_condition_data)[sample_indices]
-        sample_condition_vec = np.ones((sample_size, 1))
 
         for sketch_file, original_file in zip(sample_X, sample_Y):
 
@@ -154,13 +141,16 @@ class CelebADataset(torch.utils.data.Dataset):
             original = self.transforms['resize_original'](original)
             sketch = self.transforms['resize_sketch'](sketch)
 
+            # Normalize the images
+            original = self.transforms['normalize_original'](original)
+            sketch = self.transforms['normalize_sketch'](sketch)
+
             X.append(sketch)
             Y.append(original)
 
         # Convert lists to tensors
         X = torch.stack(X)
         Y = torch.stack(Y)
-        sample_condition_vec = torch.from_numpy(sample_condition_vec)
 
-        return X, Y, sample_condition_vec
+        return X, Y
         
